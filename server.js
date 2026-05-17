@@ -1,7 +1,125 @@
-const http = require('http');
+const express = require('express');
+const cors = require('cors');
+const path = require('path');
+
+const app = express();
 const PORT = process.env.PORT || 3000;
-http.createServer((req, res) => {
-  res.writeHead(200, { 'Content-Type': 'text/html' });
-  // صفحة تقديم الطلبات مباشرة مدمجة
-  res.end(`<!DOCTYPE html><html lang="ar" dir="rtl"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>طلب توصيل</title><style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:Arial,sans-serif;background:#F5F7FA;display:flex;justify-content:center;padding:20px}.card{max-width:500px;width:100%;background:#fff;border-radius:16px;box-shadow:0 4px 20px rgba(0,0,0,0.1);overflow:hidden}.header{background:#1565C0;color:#fff;padding:20px;text-align:center}.header h1{font-size:24px}.form{padding:20px}.form-group{margin-bottom:15px}label{display:block;font-weight:600;margin-bottom:5px;color:#333}input,textarea{width:100%;padding:12px;border:1.5px solid #E0E0E0;border-radius:10px;font-size:15px;font-family:inherit}.row{display:flex;gap:10px}.row .form-group{flex:1}button{width:100%;padding:14px;background:#1565C0;color:#fff;border:none;border-radius:12px;font-size:17px;font-weight:bold;cursor:pointer;margin-top:10px}button:hover{background:#0D47A1}.msg{display:none;text-align:center;padding:20px;background:#E8F5E9;border-radius:12px;margin-top:15px}.msg h2{color:#2E7D32}@media(max-width:400px){.row{flex-direction:column}}</style></head><body><div class="card"><div class="header"><h1>طلب توصيل</h1><p>أرسل طلبك وسيتم التواصل معك</p></div><div class="form"><form id="f"><div class="form-group"><label>الاسم *</label><input type="text" id="name" required></div><div class="form-group"><label>رقم الهاتف *</label><input type="tel" id="phone" required></div><div class="row"><div class="form-group"><label>الطلبية *</label><input type="text" id="type" required></div><div class="form-group"><label>الكمية *</label><input type="number" id="qty" min="1" value="1" required></div></div><div class="form-group"><label>العنوان *</label><textarea id="addr" required></textarea></div><div class="form-group"><label>رابط الموقع (اختياري)</label><input type="url" id="loc" placeholder="رابط Google Maps"></div><div class="form-group"><label>ملاحظات</label><textarea id="notes"></textarea></div><button type="submit">إرسال الطلب</button></form><div class="msg" id="msg"><h2>تم إرسال طلبك!</h2><p>سيتم التواصل معك قريباً</p></div></div></div><script>document.getElementById('f').addEventListener('submit',async function(e){e.preventDefault();const btn=this.querySelector('button');btn.disabled=true;btn.textContent='جار الإرسال...';try{const r=await fetch('/api/orders',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({customerName:name.value,customerPhone:phone.value,orderType:type.value,quantity:qty.value,deliveryAddress:addr.value,locationUrl:loc.value,notes:notes.value})});if(r.ok){this.style.display='none';document.getElementById('msg').style.display='block'}else{alert('خطأ');btn.disabled=false;btn.textContent='إرسال الطلب'}}catch{alert('تعذر الاتصال');btn.disabled=false;btn.textContent='إرسال الطلب'}});</script></body></html>`);
-}).listen(PORT, '0.0.0.0', () => console.log(`Server on ${PORT}`));
+const DATABASE_URL = process.env.DATABASE_URL;
+
+app.use(cors());
+app.use(express.json());
+
+// تخزين مؤقت في الذاكرة
+let memoryOrders = [];
+let memoryId = 1;
+let useDb = false;
+let pool = null;
+
+// محاولة الاتصال بقاعدة البيانات
+if (DATABASE_URL) {
+  try {
+    const { Pool } = require('pg');
+    pool = new Pool({ connectionString: DATABASE_URL, ssl: { rejectUnauthorized: false }, connectionTimeoutMillis: 5000 });
+    pool.query('SELECT 1').then(() => {
+      useDb = true;
+      console.log('✅ PostgreSQL متصل');
+      pool.query(`CREATE TABLE IF NOT EXISTS orders (
+        id SERIAL PRIMARY KEY, customer_name TEXT NOT NULL, customer_phone TEXT NOT NULL,
+        order_type TEXT NOT NULL, quantity INTEGER NOT NULL DEFAULT 1, delivery_address TEXT NOT NULL,
+        location_url TEXT DEFAULT '', notes TEXT DEFAULT '', synced BOOLEAN DEFAULT false,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      )`).catch(e => console.error('Create table error:', e.message));
+    }).catch(e => {
+      console.log('⚠️ PostgreSQL غير متاح، استخدام التخزين المؤقت:', e.message);
+    });
+  } catch (e) {
+    console.log('⚠️ تعذر تحميل pg، استخدام التخزين المؤقت:', e.message);
+  }
+}
+
+// صفحة استقبال الطلبات
+app.use(express.static(path.join(__dirname, 'public')));
+
+app.get('/', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
+app.get('/api/status', (req, res) => {
+  res.json({ status: 'ok', db: useDb ? 'postgresql' : 'memory', orders: memoryOrders.length });
+});
+
+app.post('/api/orders', async (req, res) => {
+  try {
+    const { customerName, customerPhone, orderType, quantity, deliveryAddress, locationUrl, notes } = req.body;
+    if (!customerName || !customerPhone || !orderType || !quantity || !deliveryAddress) {
+      return res.status(400).json({ error: 'جميع الحقول مطلوبة' });
+    }
+
+    if (useDb) {
+      const r = await pool.query(
+        `INSERT INTO orders (customer_name,customer_phone,order_type,quantity,delivery_address,location_url,notes)
+         VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
+        [customerName, customerPhone, orderType, parseInt(quantity)||1, deliveryAddress, locationUrl||'', notes||'']
+      );
+      return res.status(201).json({ message: 'تم الاستلام', order: formatOrder(r.rows[0]) });
+    }
+
+    // تخزين مؤقت
+    const order = {
+      id: memoryId++, customerName, customerPhone, orderType, quantity: parseInt(quantity)||1,
+      deliveryAddress, locationUrl: locationUrl||'', notes: notes||'',
+      synced: false, createdAt: new Date().toISOString()
+    };
+    memoryOrders.unshift(order);
+    res.status(201).json({ message: 'تم الاستلام', order });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'خطأ في الخادم' });
+  }
+});
+
+app.get('/api/orders', async (req, res) => {
+  try {
+    if (useDb) {
+      const since = req.query.since || '1970-01-01';
+      const r = await pool.query('SELECT * FROM orders WHERE created_at > $1 ORDER BY created_at DESC', [since]);
+      return res.json(r.rows.map(formatOrder));
+    }
+    // تخزين مؤقت
+    const since = req.query.since ? new Date(req.query.since).getTime() : 0;
+    res.json(memoryOrders.filter(o => new Date(o.createdAt).getTime() > since));
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'خطأ' });
+  }
+});
+
+app.post('/api/orders/sync', async (req, res) => {
+  try {
+    const { ids } = req.body;
+    if (!ids || !Array.isArray(ids)) return res.status(400).json({ error: 'ids مطلوب' });
+
+    if (useDb) {
+      const r = await pool.query('UPDATE orders SET synced=true WHERE id=ANY($1::int[])', [ids]);
+      return res.json({ message: 'تم', count: r.rowCount });
+    }
+    let count = 0;
+    memoryOrders.forEach(o => { if (ids.includes(o.id)) { o.synced = true; count++; } });
+    res.json({ message: 'تم', count });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'خطأ' });
+  }
+});
+
+function formatOrder(row) {
+  return {
+    id: row.id, customerName: row.customer_name, customerPhone: row.customer_phone,
+    orderType: row.order_type, quantity: row.quantity, deliveryAddress: row.delivery_address,
+    locationUrl: row.location_url||'', notes: row.notes||'', synced: row.synced, createdAt: row.created_at
+  };
+}
+
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`🚀 Server running on port ${PORT} (${useDb ? 'PostgreSQL' : 'In-Memory'})`);
+});
