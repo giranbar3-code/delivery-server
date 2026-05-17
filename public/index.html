@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>تقديم طلب توصيل</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', Tahoma, Arial, sans-serif;
+            background: #F5F7FA;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 16px;
+        }
+        .container { max-width: 480px; width: 100%; }
+        .header {
+            background: #1565C0; color: white; padding: 20px;
+            border-radius: 16px 16px 0 0; text-align: center;
+        }
+        .header h1 { font-size: 22px; margin-bottom: 4px; }
+        .header p { font-size: 14px; opacity: 0.9; }
+        .form-card {
+            background: white; padding: 20px;
+            border-radius: 0 0 16px 16px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.08);
+        }
+        .form-group { margin-bottom: 16px; }
+        .form-group label {
+            display: block; font-size: 14px; font-weight: 600;
+            color: #333; margin-bottom: 6px;
+        }
+        .form-group label .required { color: #C62828; }
+        .form-group input, .form-group textarea {
+            width: 100%; padding: 12px 14px; font-size: 15px;
+            border: 1.5px solid #E0E0E0; border-radius: 10px;
+            background: #FAFAFA; transition: border-color 0.2s;
+            font-family: inherit;
+        }
+        .form-group input:focus, .form-group textarea:focus {
+            outline: none; border-color: #1565C0; background: white;
+        }
+        .form-group textarea { resize: vertical; min-height: 60px; }
+        .form-row { display: flex; gap: 12px; }
+        .form-row .form-group { flex: 1; }
+        .btn-submit {
+            width: 100%; padding: 14px; font-size: 17px; font-weight: bold;
+            background: #1565C0; color: white; border: none;
+            border-radius: 12px; cursor: pointer; transition: background 0.2s;
+            margin-top: 8px;
+        }
+        .btn-submit:hover { background: #0D47A1; }
+        .btn-submit:disabled { background: #A0A0A0; cursor: not-allowed; }
+        .success-msg {
+            display: none; text-align: center; padding: 20px;
+            background: #E8F5E9; border-radius: 12px; margin-top: 16px;
+        }
+        .success-msg h2 { color: #2E7D32; margin-bottom: 8px; }
+        .success-msg p { color: #555; font-size: 14px; }
+        .footer { text-align: center; margin-top: 16px; font-size: 12px; color: #999; }
+        @media (max-width: 400px) {
+            .form-row { flex-direction: column; gap: 0; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>📦 طلب توصيل</h1>
+            <p>سيتم إرسال طلبك مباشرة</p>
+        </div>
+        <div class="form-card">
+            <form id="orderForm">
+                <div class="form-group">
+                    <label>اسم الزبون <span class="required">*</span></label>
+                    <input type="text" id="customerName" placeholder="ادخل اسمك" required>
+                </div>
+                <div class="form-group">
+                    <label>رقم الهاتف <span class="required">*</span></label>
+                    <input type="tel" id="customerPhone" placeholder="09xxxxxxxx" required>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>نوع الطلبية <span class="required">*</span></label>
+                        <input type="text" id="orderType" placeholder="أكل، مستلزمات..." required>
+                    </div>
+                    <div class="form-group">
+                        <label>الكمية <span class="required">*</span></label>
+                        <input type="number" id="quantity" placeholder="1" min="1" required>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>عنوان التوصيل <span class="required">*</span></label>
+                    <textarea id="address" placeholder="ادخل العنوان بالتفصيل" required></textarea>
+                </div>
+                <div class="form-group">
+                    <label>رابط الموقع (اختياري)</label>
+                    <input type="url" id="locationUrl" placeholder="الصق رابط Google Maps">
+                </div>
+                <div class="form-group">
+                    <label>ملاحظات (اختياري)</label>
+                    <textarea id="notes" placeholder="أي ملاحظات إضافية..."></textarea>
+                </div>
+                <button type="submit" class="btn-submit" id="submitBtn">📩 إرسال الطلب</button>
+            </form>
+            <div class="success-msg" id="successMsg">
+                <h2>✅ تم إرسال طلبك!</h2>
+                <p>سيتم التواصل معك قريباً لتأكيد التوصيل</p>
+            </div>
+        </div>
+        <div class="footer">جميع الحقوق محفوظة &copy; <span id="year"></span></div>
+    </div>
+    <script>
+        document.getElementById('year').textContent = new Date().getFullYear();
+
+        document.getElementById('orderForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            const btn = document.getElementById('submitBtn');
+            btn.disabled = true; btn.textContent = 'جارٍ الإرسال...';
+
+            const data = {
+                customerName: document.getElementById('customerName').value.trim(),
+                customerPhone: document.getElementById('customerPhone').value.trim(),
+                orderType: document.getElementById('orderType').value.trim(),
+                quantity: document.getElementById('quantity').value.trim(),
+                deliveryAddress: document.getElementById('address').value.trim(),
+                locationUrl: document.getElementById('locationUrl').value.trim(),
+                notes: document.getElementById('notes').value.trim()
+            };
+
+            try {
+                const res = await fetch('/api/orders', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(data)
+                });
+                if (res.ok) {
+                    document.getElementById('orderForm').style.display = 'none';
+                    document.getElementById('successMsg').style.display = 'block';
+                } else {
+                    alert('حدث خطأ، حاول مرة أخرى');
+                    btn.disabled = false; btn.textContent = '📩 إرسال الطلب';
+                }
+            } catch {
+                alert('تعذّر الاتصال بالخادم');
+                btn.disabled = false; btn.textContent = '📩 إرسال الطلب';
+            }
+        });
+    </script>
+</body>
+</html>
