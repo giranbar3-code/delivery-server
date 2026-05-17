@@ -15,7 +15,7 @@
             justify-content: center;
             padding: 16px;
         }
-        .container { max-width: 480px; width: 100%; }
+        .container { max-width: 520px; width: 100%; }
         .header {
             background: #1565C0; color: white; padding: 20px;
             border-radius: 16px 16px 0 0; text-align: center;
@@ -43,33 +43,87 @@
             outline: none; border-color: #1565C0; background: white;
         }
         .form-group textarea { resize: vertical; min-height: 60px; }
-        .form-row { display: flex; gap: 12px; }
+        .form-row { display: flex; gap: 10px; }
         .form-row .form-group { flex: 1; }
+
+        /* الأصناف المتعددة */
+        .section-title {
+            font-size: 15px; font-weight: 700; color: #1565C0;
+            margin-bottom: 10px; padding-bottom: 6px;
+            border-bottom: 2px solid #E3F2FD;
+        }
+        .item-row {
+            display: flex; gap: 8px; align-items: center;
+            margin-bottom: 8px; background: #F8FAFB;
+            padding: 8px 10px; border-radius: 10px;
+            border: 1px solid #E8E8E8;
+        }
+        .item-row .item-name {
+            flex: 1; min-width: 0;
+        }
+        .item-row .item-name input {
+            width: 100%; padding: 10px 12px; font-size: 14px;
+            border: 1.5px solid #E0E0E0; border-radius: 8px;
+            background: white;
+        }
+        .item-row .item-qty {
+            width: 80px; flex-shrink: 0;
+        }
+        .item-row .item-qty input {
+            width: 100%; padding: 10px 8px; font-size: 14px; text-align: center;
+            border: 1.5px solid #E0E0E0; border-radius: 8px;
+            background: white;
+        }
+        .item-row .btn-remove-item {
+            width: 34px; height: 34px; flex-shrink: 0;
+            background: #FFEBEE; color: #C62828; border: none;
+            border-radius: 8px; font-size: 18px; cursor: pointer;
+            display: flex; align-items: center; justify-content: center;
+            transition: background 0.2s;
+        }
+        .item-row .btn-remove-item:hover { background: #FFCDD2; }
+        .btn-add-item {
+            width: 100%; padding: 10px; font-size: 14px;
+            background: #E3F2FD; color: #1565C0; border: 1.5px dashed #1565C0;
+            border-radius: 10px; cursor: pointer; margin-bottom: 16px;
+            transition: background 0.2s; font-weight: 600;
+        }
+        .btn-add-item:hover { background: #BBDEFB; }
+
         .btn-submit {
             width: 100%; padding: 14px; font-size: 17px; font-weight: bold;
             background: #1565C0; color: white; border: none;
             border-radius: 12px; cursor: pointer; transition: background 0.2s;
-            margin-top: 8px;
+            margin-top: 4px;
         }
         .btn-submit:hover { background: #0D47A1; }
         .btn-submit:disabled { background: #A0A0A0; cursor: not-allowed; }
         .success-msg {
-            display: none; text-align: center; padding: 20px;
+            display: none; text-align: center; padding: 24px;
             background: #E8F5E9; border-radius: 12px; margin-top: 16px;
         }
         .success-msg h2 { color: #2E7D32; margin-bottom: 8px; }
         .success-msg p { color: #555; font-size: 14px; }
+        .success-msg .order-summary {
+            background: white; border-radius: 10px; padding: 12px;
+            margin-top: 12px; text-align: right; font-size: 13px; color: #333;
+        }
+        .success-msg .order-summary .item-line {
+            padding: 4px 0; border-bottom: 1px solid #F0F0F0;
+        }
         .footer { text-align: center; margin-top: 16px; font-size: 12px; color: #999; }
         @media (max-width: 400px) {
             .form-row { flex-direction: column; gap: 0; }
+            .item-row { flex-wrap: wrap; }
+            .item-row .item-qty { width: 70px; }
         }
     </style>
 </head>
 <body>
     <div class="container">
         <div class="header">
-            <h1>📦 طلب توصيل</h1>
-            <p>سيتم إرسال طلبك مباشرة</p>
+            <h1>طلب توصيل</h1>
+            <p>أضف الأصناف التي تريدها مع الكميات</p>
         </div>
         <div class="form-card">
             <form id="orderForm">
@@ -81,16 +135,12 @@
                     <label>رقم الهاتف <span class="required">*</span></label>
                     <input type="tel" id="customerPhone" placeholder="09xxxxxxxx" required>
                 </div>
-                <div class="form-row">
-                    <div class="form-group">
-                        <label>نوع الطلبية <span class="required">*</span></label>
-                        <input type="text" id="orderType" placeholder="أكل، مستلزمات..." required>
-                    </div>
-                    <div class="form-group">
-                        <label>الكمية <span class="required">*</span></label>
-                        <input type="number" id="quantity" placeholder="1" min="1" required>
-                    </div>
-                </div>
+
+                <!-- الأصناف المتعددة -->
+                <div class="section-title">🛒 الأصناف المطلوبة</div>
+                <div id="itemsContainer"></div>
+                <button type="button" class="btn-add-item" id="btnAddItem">+ إضافة صنف</button>
+
                 <div class="form-group">
                     <label>عنوان التوصيل <span class="required">*</span></label>
                     <textarea id="address" placeholder="ادخل العنوان بالتفصيل" required></textarea>
@@ -107,24 +157,76 @@
             </form>
             <div class="success-msg" id="successMsg">
                 <h2>✅ تم إرسال طلبك!</h2>
-                <p>سيتم التواصل معك قريباً لتأكيد التوصيل</p>
+                <p>سيتم التواصل معك قريباً لتأكيد الطلب</p>
+                <div class="order-summary" id="orderSummary"></div>
             </div>
         </div>
         <div class="footer">جميع الحقوق محفوظة &copy; <span id="year"></span></div>
     </div>
+
     <script>
         document.getElementById('year').textContent = new Date().getFullYear();
+
+        let itemCount = 0;
+
+        function addItemRow(name = '', qty = 1) {
+            itemCount++;
+            const container = document.getElementById('itemsContainer');
+            const div = document.createElement('div');
+            div.className = 'item-row';
+            div.dataset.index = itemCount;
+            div.innerHTML = `
+                <div class="item-name">
+                    <input type="text" class="item-name-input" placeholder="اسم الصنف" value="${name}" required>
+                </div>
+                <div class="item-qty">
+                    <input type="number" class="item-qty-input" placeholder="الكمية" value="${qty}" min="1" required>
+                </div>
+                <button type="button" class="btn-remove-item" title="إزالة">✕</button>
+            `;
+            div.querySelector('.btn-remove-item').addEventListener('click', () => {
+                div.remove();
+            });
+            container.appendChild(div);
+        }
+
+        // إضافة 3 صفوف افتراضية
+        addItemRow('', 1);
+        addItemRow('', 1);
+        addItemRow('', 1);
+
+        document.getElementById('btnAddItem').addEventListener('click', () => addItemRow('', 1));
 
         document.getElementById('orderForm').addEventListener('submit', async function(e) {
             e.preventDefault();
             const btn = document.getElementById('submitBtn');
             btn.disabled = true; btn.textContent = 'جارٍ الإرسال...';
 
+            // جمع الأصناف
+            const itemRows = document.querySelectorAll('.item-row');
+            const items = [];
+            let hasValidItem = false;
+            itemRows.forEach(row => {
+                const name = row.querySelector('.item-name-input').value.trim();
+                const qty = parseInt(row.querySelector('.item-qty-input').value) || 1;
+                if (name) {
+                    items.push({ name, quantity: qty });
+                    hasValidItem = true;
+                }
+            });
+
+            if (!hasValidItem) {
+                alert('الرجاء إضافة صنف واحد على الأقل');
+                btn.disabled = false; btn.textContent = '📩 إرسال الطلب';
+                return;
+            }
+
             const data = {
                 customerName: document.getElementById('customerName').value.trim(),
                 customerPhone: document.getElementById('customerPhone').value.trim(),
-                orderType: document.getElementById('orderType').value.trim(),
-                quantity: document.getElementById('quantity').value.trim(),
+                items: items,
+                orderType: items.map(i => i.name).join('، '),
+                quantity: items.reduce((sum, i) => sum + i.quantity, 0),
                 deliveryAddress: document.getElementById('address').value.trim(),
                 locationUrl: document.getElementById('locationUrl').value.trim(),
                 notes: document.getElementById('notes').value.trim()
@@ -137,10 +239,21 @@
                     body: JSON.stringify(data)
                 });
                 if (res.ok) {
+                    const result = await res.json();
                     document.getElementById('orderForm').style.display = 'none';
+                    const summary = document.getElementById('orderSummary');
+                    let html = '<div style="font-weight:600;margin-bottom:8px;">📋 ملخص الطلب:</div>';
+                    html += `<div>👤 ${data.customerName} - 📞 ${data.customerPhone}</div>`;
+                    html += '<div style="margin-top:6px;">🛒 الأصناف:</div>';
+                    items.forEach(i => {
+                        html += `<div class="item-line">• ${i.name} × ${i.quantity}</div>`;
+                    });
+                    html += `<div style="margin-top:6px;font-weight:600;">📍 ${data.deliveryAddress}</div>`;
+                    summary.innerHTML = html;
                     document.getElementById('successMsg').style.display = 'block';
                 } else {
-                    alert('حدث خطأ، حاول مرة أخرى');
+                    const err = await res.json();
+                    alert(err.error || 'حدث خطأ، حاول مرة أخرى');
                     btn.disabled = false; btn.textContent = '📩 إرسال الطلب';
                 }
             } catch {
