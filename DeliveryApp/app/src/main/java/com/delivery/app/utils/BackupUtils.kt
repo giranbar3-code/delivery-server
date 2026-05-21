@@ -3,16 +3,16 @@ package com.delivery.app.utils
 import android.content.Context
 import android.net.Uri
 import android.util.Log
+import com.delivery.app.data.local.DatabaseEncryptionUtil
 import com.delivery.app.data.local.DeliveryDatabase
 import java.io.File
-import java.io.RandomAccessFile
+import java.security.MessageDigest
 import java.text.SimpleDateFormat
 import java.util.*
 
 object BackupUtils {
 
     private val fileNameFormat = SimpleDateFormat("yyyy-MM-dd_HH-mm", Locale.getDefault())
-    private val SQLITE_HEADER = byteArrayOf(0x53, 0x51, 0x4C, 0x69, 0x74, 0x65, 0x20, 0x66, 0x6F, 0x72, 0x6D, 0x61, 0x74, 0x20, 0x33, 0x00)
 
     fun getBackupFileName(): String =
         "delivero_backup_${fileNameFormat.format(Date())}.db"
@@ -38,30 +38,57 @@ object BackupUtils {
         }
     }
 
-    private fun isValidDatabase(file: File): Boolean {
-        return try {
-            if (!file.exists() || file.length() < 100) return false
-            val header = ByteArray(16)
-            RandomAccessFile(file, "r").use { raf ->
-                raf.readFully(header)
+    private fun sha256Hash(file: File): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        file.inputStream().use { input ->
+            val buffer = ByteArray(8192)
+            var read: Int
+            while (input.read(buffer).also { read = it } != -1) {
+                digest.update(buffer, 0, read)
             }
-            header.contentEquals(SQLITE_HEADER)
-        } catch (e: Exception) {
-            false
         }
+        return digest.digest().joinToString("") { "%02x".format(it) }
     }
 
     fun importBackup(context: Context, backupFile: File, onComplete: (Boolean) -> Unit) {
         try {
-            if (!isValidDatabase(backupFile)) {
+            if (!backupFile.exists() || backupFile.length() < 100) {
                 onComplete(false)
                 return
             }
+            val hashBefore = sha256Hash(backupFile)
+
             synchronized(this) {
                 DeliveryDatabase.closeDatabase()
                 val dbFile = context.getDatabasePath("delivery_database")
                 backupFile.copyTo(dbFile, overwrite = true)
             }
+
+            // التحقق من التكامل: الهاش قبل وبعد الاستيراد
+            val restoredFile = context.getDatabasePath("delivery_database")
+            val hashAfter = sha256Hash(restoredFile)
+            if (hashBefore != hashAfter) {
+                restoredFile.delete()
+                onComplete(false)
+                return
+            }
+
+            // التحقق من أن قاعدة البيانات قابلة للفتح باستخدام مفتاح التشفير
+            try {
+                val passphrase = DatabaseEncryptionUtil.getOrCreatePassphrase(context)
+                val passphraseHex = passphrase.joinToString("") { "%02x".format(it) }
+                val db = net.sqlcipher.database.SQLiteDatabase.openDatabase(
+                    restoredFile.path, passphraseHex, null,
+                    net.sqlcipher.database.SQLiteDatabase.OPEN_READONLY
+                )
+                db.close()
+            } catch (e: Exception) {
+                restoredFile.delete()
+                Log.e("BackupUtils", "فشل التحقق من تشفير الاستيراد", e)
+                onComplete(false)
+                return
+            }
+
             onComplete(true)
         } catch (e: Exception) {
             Log.e("BackupUtils", "فشل استعادة النسخة الاحتياطية", e)

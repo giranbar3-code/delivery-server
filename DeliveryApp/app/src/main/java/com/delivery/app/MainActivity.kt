@@ -1,7 +1,9 @@
 package com.delivery.app
 
+import android.content.Intent
 import android.content.SharedPreferences
 import android.os.Bundle
+import android.text.InputType
 import android.widget.EditText
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
@@ -44,6 +46,13 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        // منع الفتح من تطبيقات خارجية (إلا إذا كان من Launcher)
+        if (intent.action != Intent.ACTION_MAIN) {
+            finish()
+            super.onCreate(savedInstanceState)
+            return
+        }
+
         val settingsPrefs = getSharedPreferences("settings", MODE_PRIVATE)
         val isDark = settingsPrefs.getBoolean("dark_mode", false)
         AppCompatDelegate.setDefaultNightMode(
@@ -67,6 +76,13 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
+        // التحقق من PIN قبل عرض واجهة المستخدم
+        if (checkPinLock()) {
+            setupMainUi()
+        }
+    }
+
+    private fun setupMainUi() {
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
@@ -75,14 +91,12 @@ class MainActivity : AppCompatActivity() {
         navController = navHostFragment.navController
 
         binding.bottomNavigation.setupWithNavController(navController)
-
-        checkPinLock()
     }
 
     private fun showSetupKeyPrompt(prefs: SharedPreferences) {
         val input = EditText(this).apply {
             hint = "رمز التفعيل"
-            inputType = android.text.InputType.TYPE_CLASS_TEXT
+            inputType = InputType.TYPE_CLASS_TEXT
         }
         AlertDialog.Builder(this, android.R.style.Theme_Material_Light_Dialog_Alert)
             .setTitle("رمز التفعيل")
@@ -102,25 +116,26 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
-    private fun checkPinLock() {
+    private fun checkPinLock(): Boolean {
         val securePrefs = getPinPrefs()
-        if (!securePrefs.getBoolean("pin_enabled", false)) return
-        val savedPin = securePrefs.getString("pin", "") ?: return
-        if (savedPin.isEmpty()) return
+        if (!securePrefs.getBoolean("pin_enabled", false)) return true
+        val savedPin = securePrefs.getString("pin", "") ?: return true
+        if (savedPin.isEmpty()) return true
         pinAttempts = securePrefs.getInt("pin_attempts", 0)
         if (pinAttempts >= 3) {
             Toast.makeText(this, "تم قفل التطبيق — أعد التثبيت", Toast.LENGTH_LONG).show()
             finishAffinity()
-            return
+            return false
         }
-        showPinDialog(savedPin, securePrefs)
+        showPinDialog(savedPin.toCharArray(), securePrefs)
+        return false
     }
 
-    private fun showPinDialog(savedPin: String, securePrefs: SharedPreferences) {
+    private fun showPinDialog(savedPinChars: CharArray, securePrefs: SharedPreferences) {
         val input = EditText(this).apply {
-            inputType = android.text.InputType.TYPE_CLASS_NUMBER or android.text.InputType.TYPE_NUMBER_VARIATION_PASSWORD
+            inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_VARIATION_PASSWORD
             maxLines = 1
-            setHint("أدخل الرقم السري")
+            hint = "أدخل الرقم السري"
         }
 
         AlertDialog.Builder(this, android.R.style.Theme_Material_Light_Dialog_Alert)
@@ -129,24 +144,41 @@ class MainActivity : AppCompatActivity() {
             .setView(input)
             .setCancelable(false)
             .setPositiveButton("دخول") { dialog, _ ->
-                val entered = input.text.toString().trim()
-                if (entered == savedPin) {
+                val enteredText = input.text?.toString()?.trim() ?: ""
+                val enteredChars = enteredText.toCharArray()
+
+                val match = savedPinChars contentEquals enteredChars
+
+                // مسح الذاكرة
+                enteredChars.fill('\u0000')
+
+                if (match) {
+                    savedPinChars.fill('\u0000')
                     securePrefs.edit().putInt("pin_attempts", 0).apply()
                     dialog.dismiss()
+                    setupMainUi()
                 } else {
                     pinAttempts++
                     securePrefs.edit().putInt("pin_attempts", pinAttempts).apply()
                     if (pinAttempts >= 3) {
+                        savedPinChars.fill('\u0000')
                         Toast.makeText(this, "محاولات كثيرة خاطئة — تم قفل التطبيق", Toast.LENGTH_LONG).show()
                         finishAffinity()
                     } else {
                         Toast.makeText(this, "رقم سري خاطئ (محاولة $pinAttempts/3)", Toast.LENGTH_SHORT).show()
                         input.text?.clear()
-                        showPinDialog(savedPin, securePrefs)
+                        showPinDialog(savedPinChars, securePrefs)
                     }
                 }
             }
-            .setCancelable(false)
+            .setOnCancelListener {
+                savedPinChars.fill('\u0000')
+                finishAffinity()
+            }
             .show()
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
     }
 }
