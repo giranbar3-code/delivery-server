@@ -1,21 +1,60 @@
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 const DATABASE_URL = process.env.DATABASE_URL;
-const API_KEY = process.env.API_KEY || 'delivery-app-key-2024';
+const API_KEY = process.env.API_KEY;
 const MAX_MEMORY_ORDERS = 500;
 const MAX_ORDERS_PER_PHONE_PER_HOUR = 5;
 
-app.use(cors());
+if (!API_KEY) {
+  console.error('❌ متغير API_KEY غير مضبوط — أوقف التشغيل');
+  process.exit(1);
+}
+
+// رؤوس أمان
+app.use(helmet());
+
+// CORS مقيد — يسمح فقط للسيرفر نفسه (والنطاقات المحددة)
+const allowedOrigins = process.env.ALLOWED_ORIGINS
+  ? process.env.ALLOWED_ORIGINS.split(',').map(s => s.trim())
+  : [];
+app.use(cors({
+  origin: (origin, callback) => {
+    if (!origin || allowedOrigins.length === 0 || allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(null, false);
+    }
+  }
+}));
+
+// Rate Limiting عام — كل IP
+const globalLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 100,
+  message: { error: 'طلبات كثيرة جداً، حاول لاحقاً', code: 'RATE_LIMITED' }
+});
+app.use(globalLimiter);
+
+// Rate Limiting مشدد على API الطلبات
+const apiLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 30,
+  message: { error: 'طلبات كثيرة جداً على API', code: 'RATE_LIMITED' }
+});
+app.use('/api', apiLimiter);
+
 app.use(express.json({ limit: '1mb' }));
 
 app.use((req, res, next) => {
   // POST /api/orders عام (نموذج الزبون) — لا يحتاج مفتاح
   if (req.path.startsWith('/api/') && req.path !== '/api/status' && !(req.method === 'POST' && req.path === '/api/orders')) {
-    const providedKey = req.headers['x-api-key'] || req.query.apiKey;
+    const providedKey = req.headers['x-api-key'];
     if (providedKey !== API_KEY) {
       return res.status(401).json({ error: 'مفتاح API غير صالح' });
     }
@@ -31,7 +70,7 @@ let pool = null;
 if (DATABASE_URL) {
   try {
     const { Pool } = require('pg');
-    pool = new Pool({ connectionString: DATABASE_URL, ssl: { rejectUnauthorized: false }, connectionTimeoutMillis: 5000 });
+    pool = new Pool({ connectionString: DATABASE_URL, ssl: { rejectUnauthorized: true }, connectionTimeoutMillis: 5000 });
     pool.query('SELECT 1').then(() => {
       useDb = true;
       console.log('✅ PostgreSQL متصل');
