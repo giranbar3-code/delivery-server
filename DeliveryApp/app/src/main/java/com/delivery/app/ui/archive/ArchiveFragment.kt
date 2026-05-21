@@ -246,7 +246,7 @@ class ArchiveFragment : Fragment() {
             appendLine("التاريخ: ${SimpleDateFormat("dd/MM/yyyy HH:mm", Locale.getDefault()).format(Date(order.createdAt))}")
             appendLine()
             appendLine("الزبون: ${order.customerName}")
-            appendLine("الهاتف: ${order.customerPhone}")
+            appendLine("الهاتف: ****${order.customerPhone.takeLast(4)}")
             appendLine("العنوان: ${order.deliveryAddress}")
             appendLine()
             appendLine("المواد:")

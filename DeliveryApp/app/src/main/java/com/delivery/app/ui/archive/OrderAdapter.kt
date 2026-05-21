@@ -112,10 +112,17 @@ class OrderAdapter(
                 ContextCompat.getDrawable(binding.root.context, android.R.drawable.ic_menu_compass), null, null, null
             )
 
-            // ✅ رقم الزبون — اتصال + واتساب
+            // ✅ رقم الزبون — مقنّع افتراضياً، ضغطة تكشفه
             if (order.customerPhone.isNotEmpty()) {
                 binding.rowPhone.visibility = View.VISIBLE
-                binding.tvPhone.text = "📞 ${order.customerPhone}"
+                val maskedPhone = "****${order.customerPhone.takeLast(4)}"
+                binding.tvPhone.text = "📞 $maskedPhone"
+
+                var showingFull = false
+                binding.tvPhone.setOnClickListener {
+                    showingFull = !showingFull
+                    binding.tvPhone.text = if (showingFull) "📞 ${order.customerPhone}" else "📞 $maskedPhone"
+                }
 
                 binding.btnCall.setOnClickListener {
                     val intent = Intent(Intent.ACTION_DIAL, Uri.parse("tel:${order.customerPhone}"))

@@ -18,6 +18,7 @@ object RetrofitClient {
     private const val KEY_API_KEY = "api_key"
 
     private var customBaseUrl: String? = null
+    private var appContext: Context? = null
 
     private fun getSecurePrefs(context: Context): SharedPreferences {
         val masterKey = MasterKeys.getOrCreate(MasterKeys.AES256_GCM_SPEC)
@@ -28,6 +29,11 @@ object RetrofitClient {
             EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
             EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
         )
+    }
+
+    private fun readApiKey(context: Context): String {
+        val prefs = getSecurePrefs(context)
+        return prefs.getString(KEY_API_KEY, "") ?: ""
     }
 
     fun getBaseUrl(context: Context): String {
@@ -46,8 +52,7 @@ object RetrofitClient {
     }
 
     fun getApiKey(context: Context): String {
-        val prefs = getSecurePrefs(context)
-        return prefs.getString(KEY_API_KEY, "") ?: ""
+        return readApiKey(context)
     }
 
     fun setApiKey(context: Context, key: String) {
@@ -59,12 +64,15 @@ object RetrofitClient {
     @Volatile
     private var apiInstance: OrderApi? = null
 
-    private fun createClient(baseUrl: String, apiKey: String): OrderApi {
+    private fun createClient(baseUrl: String, context: Context): OrderApi {
         val authInterceptor = Interceptor { chain ->
             val originalRequest = chain.request()
-            val requestWithAuth = originalRequest.newBuilder()
-                .header("X-API-Key", apiKey)
-                .build()
+            val apiKey = readApiKey(context)
+            val requestWithAuth = if (apiKey.isNotEmpty()) {
+                originalRequest.newBuilder()
+                    .header("X-API-Key", apiKey)
+                    .build()
+            } else originalRequest
             chain.proceed(requestWithAuth)
         }
 
@@ -84,7 +92,7 @@ object RetrofitClient {
 
     fun getApi(context: Context): OrderApi {
         return apiInstance ?: synchronized(this) {
-            apiInstance ?: createClient(getBaseUrl(context), getApiKey(context)).also { apiInstance = it }
+            apiInstance ?: createClient(getBaseUrl(context), context).also { apiInstance = it }
         }
     }
 

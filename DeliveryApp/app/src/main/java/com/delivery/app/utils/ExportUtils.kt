@@ -26,19 +26,20 @@ object ExportUtils {
         } else value
     }
 
-    fun exportToCsv(context: Context, orders: List<Order>, periodName: String) {
+    fun exportToCsv(context: Context, orders: List<Order>, periodName: String, includePii: Boolean = false) {
         val fileName = "تقرير_${periodName}_${fileNameFormat.format(Date())}.csv"
-        val file = File(
-            context.getExternalFilesDir(Environment.DIRECTORY_DOCUMENTS),
-            fileName
-        )
+        val dir = context.getExternalFilesDir("ExternalExports")
+        if (dir != null && !dir.exists()) dir.mkdirs()
+        val file = File(dir, fileName)
 
         val content = buildString {
             appendLine("اسم الزبون,نوع الطلبية,الكمية,العنوان,السائق,سعر الشراء,سعر التوصيل,الحالة,التاريخ")
             orders.forEach { order ->
+                val name = if (includePii) order.customerName else "***"
+                val address = if (includePii) order.deliveryAddress else "***"
                 appendLine(
-                    "${escapeCsv(order.customerName)},${escapeCsv(order.orderType)},${order.quantity}," +
-                    "${escapeCsv(order.deliveryAddress)},${escapeCsv(order.driverName)}," +
+                    "${escapeCsv(name)},${escapeCsv(order.orderType)},${order.quantity}," +
+                    "${escapeCsv(address)},${escapeCsv(order.driverName)}," +
                     "${order.purchasePrice.toLong()},${order.deliveryPrice.toLong()}," +
                     "${escapeCsv(order.statusEnum.label)},${escapeCsv(dateFormat.format(Date(order.createdAt)))}"
                 )
@@ -53,7 +54,7 @@ object ExportUtils {
         shareFile(context, file, "text/csv")
     }
 
-    fun exportToPdf(context: Context, orders: List<Order>, periodName: String) {
+    fun exportToPdf(context: Context, orders: List<Order>, periodName: String, includePii: Boolean = false) {
         try {
             val dir = context.getExternalFilesDir(Environment.DIRECTORY_DOCUMENTS)
             if (dir != null && !dir.exists()) dir.mkdirs()
@@ -135,9 +136,11 @@ object ExportUtils {
 
             orders.forEach { order ->
                 checkPage()
-                drawText("#${order.orderNumber} - ${order.customerName}", headerPaint)
+                val name = if (includePii) order.customerName else "***"
+                val address = if (includePii) order.deliveryAddress else "***"
+                drawText("#${order.orderNumber} - $name", headerPaint)
                 drawText("Type: ${order.orderType} | Qty: ${order.quantity}", normalPaint)
-                drawText("Address: ${order.deliveryAddress}", normalPaint)
+                drawText("Address: $address", normalPaint)
                 if (order.driverName.isNotEmpty()) {
                     drawText("Driver: ${order.driverName}", normalPaint)
                 }

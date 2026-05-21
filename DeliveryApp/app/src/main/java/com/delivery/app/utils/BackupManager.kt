@@ -42,9 +42,8 @@ object BackupManager {
                 val orders = mutableListOf<Order>()
                 context.contentResolver.openInputStream(uri)?.use { stream ->
                     val reader = BufferedReader(InputStreamReader(stream, Charsets.UTF_8))
+                    reader.readLine() // تخطي BOM + سطر الهيدر
                     var line = reader.readLine()
-                    if (line != null && line.startsWith("\uFEFF")) line = line.substring(1)
-                    line = reader.readLine() // تخطي الهيدر
                     while (line != null) {
                         parseLine(line)?.let { orders.add(it) }
                         line = reader.readLine()
