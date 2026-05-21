@@ -3,6 +3,7 @@ const cors = require('cors');
 const path = require('path');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
+const dns = require('dns');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -16,7 +17,10 @@ if (!API_KEY) {
   process.exit(1);
 }
 
-// رؤوس أمان — مع السماح بالسكريبتات الداخلية لصفحة العميل
+// تصحيح IP خلف Proxy Render — ضروري لـ Rate Limiting لكل زبون على حدة
+app.set('trust proxy', 1);
+
+// رؤوس أمان
 app.use(helmet({
   contentSecurityPolicy: {
     directives: {
@@ -35,7 +39,7 @@ app.use(helmet({
   },
 }));
 
-// CORS مقيد — يسمح فقط للسيرفر نفسه (والنطاقات المحددة)
+// CORS مقيد
 const allowedOrigins = process.env.ALLOWED_ORIGINS
   ? process.env.ALLOWED_ORIGINS.split(',').map(s => s.trim())
   : [];
@@ -49,7 +53,7 @@ app.use(cors({
   }
 }));
 
-// Rate Limiting عام — كل IP
+// Rate Limiting عام — لكل IP (trust proxy لازم يكون مضبوط عشان يشتغل صح)
 const globalLimiter = rateLimit({
   windowMs: 60 * 1000,
   max: 100,
@@ -67,11 +71,11 @@ app.use('/api', apiLimiter);
 
 app.use(express.json({ limit: '1mb' }));
 
+// التحقق من مفتاح API
 app.use((req, res, next) => {
-  // POST /api/orders عام (نموذج الزبون) — لا يحتاج مفتاح
   if (req.path.startsWith('/api/') && req.path !== '/api/status' && !(req.method === 'POST' && req.path === '/api/orders')) {
     const providedKey = req.headers['x-api-key'];
-    if (providedKey !== API_KEY) {
+    if (!providedKey || providedKey !== API_KEY) {
       return res.status(401).json({ error: 'مفتاح API غير صالح' });
     }
   }
@@ -83,31 +87,107 @@ let memoryId = 1;
 let useDb = false;
 let pool = null;
 
-if (DATABASE_URL) {
+// محاولة حل DNS لتشخيص المشكلة
+function resolveDbHost(url) {
   try {
-    const { Pool } = require('pg');
-    pool = new Pool({ connectionString: DATABASE_URL, ssl: { rejectUnauthorized: true }, connectionTimeoutMillis: 5000 });
-    pool.query('SELECT 1').then(() => {
-      useDb = true;
-      console.log('✅ PostgreSQL متصل');
-      pool.query(`CREATE TABLE IF NOT EXISTS orders (
-        id SERIAL PRIMARY KEY, customer_name TEXT NOT NULL, customer_phone TEXT NOT NULL,
-        order_type TEXT NOT NULL, quantity INTEGER NOT NULL DEFAULT 1, delivery_address TEXT NOT NULL,
-        location_url TEXT DEFAULT '', notes TEXT DEFAULT '', items TEXT DEFAULT '[]',
-        verified BOOLEAN DEFAULT false, client_ip TEXT DEFAULT '',
-        synced BOOLEAN DEFAULT false, created_at TIMESTAMPTZ DEFAULT NOW(),
-        office_id BIGINT NOT NULL DEFAULT 0
-      )`).then(() => {
-        pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS office_id BIGINT NOT NULL DEFAULT 0`)
-          .catch(e => console.error('Add column error:', e.message));
-      }).catch(e => console.error('Create table error:', e.message));
-    }).catch(e => {
-      console.log('⚠️ PostgreSQL غير متاح، استخدام التخزين المؤقت:', e.message);
-    });
+    const match = url.match(/@([^:]+)/);
+    if (match) {
+      const host = match[1];
+      console.log(`🔍 محاولة حل DNS للمضيف: ${host}`);
+      dns.resolve4(host, (err, addresses) => {
+        if (err) {
+          console.log(`⚠️ فشل حل DNS: ${err.code}`);
+        } else {
+          console.log(`✅ DNS تم الحل: ${host} → ${addresses.join(', ')}`);
+        }
+      });
+    }
+  } catch (e) {}
+}
+
+// محاولة الاتصال بـ PostgreSQL مع إعادة المحاولة
+async function connectToDatabase(retries = 5, delay = 3000) {
+  if (!DATABASE_URL) return null;
+
+  resolveDbHost(DATABASE_URL);
+
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      const { Pool } = require('pg');
+      const p = new Pool({
+        connectionString: DATABASE_URL,
+        ssl: { rejectUnauthorized: true },
+        connectionTimeoutMillis: 10000,
+        query_timeout: 10000,
+        family: 4
+      });
+      await p.query('SELECT 1');
+      console.log(`✅ PostgreSQL متصل (محاولة ${attempt})`);
+      return p;
+    } catch (err) {
+      console.log(`⚠️ PostgreSQL غير متاح (محاولة ${attempt}/${retries}): ${err.message}`);
+      if (attempt < retries) {
+        console.log(`⏳ إعادة المحاولة بعد ${delay/1000} ثوانٍ...`);
+        await new Promise(r => setTimeout(r, delay));
+      }
+    }
+  }
+  return null;
+}
+
+// تهيئة قاعدة البيانات
+async function initDatabase(p) {
+  try {
+    await p.query(`CREATE TABLE IF NOT EXISTS orders (
+      id SERIAL PRIMARY KEY, customer_name TEXT NOT NULL, customer_phone TEXT NOT NULL,
+      order_type TEXT NOT NULL, quantity INTEGER NOT NULL DEFAULT 1, delivery_address TEXT NOT NULL,
+      location_url TEXT DEFAULT '', notes TEXT DEFAULT '', items TEXT DEFAULT '[]',
+      verified BOOLEAN DEFAULT false, client_ip TEXT DEFAULT '',
+      synced BOOLEAN DEFAULT false, created_at TIMESTAMPTZ DEFAULT NOW(),
+      office_id BIGINT NOT NULL DEFAULT 0
+    )`);
+    // تأكد من وجود عمود office_id (للهجرة من الإصدارات القديمة)
+    await p.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS office_id BIGINT NOT NULL DEFAULT 0`)
+      .catch(e => {});
+    console.log('✅ جداول PostgreSQL جاهزة');
   } catch (e) {
-    console.log('⚠️ تعذر تحميل pg، استخدام التخزين المؤقت:', e.message);
+    console.error('❌ فشل تهيئة الجداول:', e.message);
+    throw e;
   }
 }
+
+// بدء الاتصال — نحاول 5 مرات قبل الرجوع للذاكرة المؤقتة
+(async () => {
+  pool = await connectToDatabase(5, 3000);
+  if (pool) {
+    try {
+      await initDatabase(pool);
+      useDb = true;
+    } catch (e) {
+      console.log('⚠️ فشل تهيئة الجداول، استخدام التخزين المؤقت');
+    }
+  } else {
+    console.log('⚠️ PostgreSQL غير متاح بعد 5 محاولات، استخدام التخزين المؤقت');
+  }
+
+  // محاولة إعادة الاتصال في الخلفية كل 30 ثانية
+  if (!useDb) {
+    setInterval(async () => {
+      console.log('🔄 محاولة إعادة الاتصال بـ PostgreSQL...');
+      const p = await connectToDatabase(1, 0);
+      if (p) {
+        try {
+          await initDatabase(p);
+          pool = p;
+          useDb = true;
+          console.log('✅ تم التبديل إلى PostgreSQL بعد إعادة الاتصال');
+        } catch (e) {
+          await p.end().catch(() => {});
+        }
+      }
+    }, 30000);
+  }
+})();
 
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
@@ -137,8 +217,13 @@ app.post('/api/orders', async (req, res) => {
       return res.status(400).json({ error: 'الرجاء الانتظار قليلاً قبل الإرسال', code: 'TOO_FAST' });
     }
 
+    const MAX_LEN = 500;
+    const PHONE_MAX_LEN = 30;
     if (!customerName || !customerPhone || !deliveryAddress || !locationUrl || !/^https?:\/\//i.test(locationUrl)) {
       return res.status(400).json({ error: 'اسم الزبون، رقم الهاتف، العنوان ورابط الموقع إجبارية' });
+    }
+    if (customerName.length > MAX_LEN || (customerPhone && customerPhone.length > PHONE_MAX_LEN) || deliveryAddress.length > MAX_LEN || (notes && notes.length > MAX_LEN)) {
+      return res.status(400).json({ error: 'النص طويل جداً' });
     }
 
     // 🛡 التحقق من عدد الطلبات لنفس الرقم
@@ -166,6 +251,9 @@ app.post('/api/orders', async (req, res) => {
     const itemsJson = JSON.stringify(items || []);
     const finalOrderType = orderType || (items && items.length ? items.map(i => i.name).join('، ') : 'طلب');
     const finalQuantity = quantity || (items ? items.reduce((s, i) => s + (parseInt(i.quantity) || 1), 0) : 1);
+    if (finalQuantity < 1 || finalQuantity > 9999) {
+      return res.status(400).json({ error: 'الكمية خارج النطاق المسموح' });
+    }
     const isVerified = recentCount === 0;
     const finalOfficeId = parseInt(officeId) || 0;
 
