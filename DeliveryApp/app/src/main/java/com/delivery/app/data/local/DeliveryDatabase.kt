@@ -10,7 +10,7 @@ import com.delivery.app.data.model.Customer
 import com.delivery.app.data.model.Driver
 import com.delivery.app.data.model.Office
 import com.delivery.app.data.model.Order
-import com.delivery.app.data.local.OfficeDao
+import net.sqlcipher.database.SupportFactory
 
 @Database(entities = [Order::class, Driver::class, Customer::class, Office::class], version = 12, exportSchema = true)
 abstract class DeliveryDatabase : RoomDatabase() {
@@ -116,14 +116,29 @@ abstract class DeliveryDatabase : RoomDatabase() {
 
         fun getDatabase(context: Context): DeliveryDatabase {
             return INSTANCE ?: synchronized(this) {
+                val appContext = context.applicationContext
+                val dbName = "delivery_database"
+
+                // التبديل من قاعدة بيانات غير مشفّرة إلى مشفّرة
+                val dbFile = appContext.getDatabasePath(dbName)
+                if (dbFile.exists() && !DatabaseEncryptionUtil.isMigratedToEncryption(appContext)) {
+                    dbFile.delete()
+                }
+
+                val passphrase = DatabaseEncryptionUtil.getOrCreatePassphrase(appContext)
+                val factory = SupportFactory(passphrase)
+
                 val instance = Room.databaseBuilder(
-                    context.applicationContext,
+                    appContext,
                     DeliveryDatabase::class.java,
-                    "delivery_database"
+                    dbName
                 )
+                .openHelperFactory(factory)
                 .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12)
                 .fallbackToDestructiveMigration()
                 .build()
+
+                DatabaseEncryptionUtil.markMigrated(appContext)
                 INSTANCE = instance
                 instance
             }
