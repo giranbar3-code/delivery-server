@@ -58,6 +58,14 @@ app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
+app.get('/office/:id', (req, res) => {
+  const officeId = parseInt(req.params.id) || 0;
+  const fs = require('fs');
+  let html = fs.readFileSync(path.join(__dirname, 'public', 'index.html'), 'utf8');
+  html = html.replace(/\{\{OFFICE_ID\}\}/g, officeId);
+  res.send(html);
+});
+
 app.get('/api/status', (req, res) => {
   res.json({ status: 'ok', db: useDb ? 'postgresql' : 'memory', orders: memoryOrders.length });
 });

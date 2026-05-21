@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>تقديم طلب توصيل</title>
+    <meta name="office-id" content="{{OFFICE_ID}}">
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
@@ -173,6 +174,7 @@
     <script>
         document.getElementById('year').textContent = new Date().getFullYear();
         const pageLoadTime = Date.now();
+        const OFFICE_ID = parseInt(document.querySelector('meta[name="office-id"]')?.getAttribute('content')) || 0;
 
         let itemCount = 0;
 
@@ -250,7 +252,8 @@
                 locationUrl: locationUrl,
                 notes: document.getElementById('notes').value.trim(),
                 honeypot: document.getElementById('honeypot').value.trim(),
-                pageLoad: pageLoadTime
+                pageLoad: pageLoadTime,
+                officeId: OFFICE_ID
             };
 
             try {
