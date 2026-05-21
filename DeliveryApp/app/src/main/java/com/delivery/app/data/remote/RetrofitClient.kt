@@ -3,7 +3,8 @@ package com.delivery.app.data.remote
 import android.content.Context
 import android.content.SharedPreferences
 import androidx.security.crypto.EncryptedSharedPreferences
-import androidx.security.crypto.MasterKeys
+import androidx.security.crypto.MasterKey
+import com.delivery.app.BuildConfig
 import okhttp3.Interceptor
 import okhttp3.OkHttpClient
 import retrofit2.Retrofit
@@ -12,7 +13,7 @@ import java.util.concurrent.TimeUnit
 
 object RetrofitClient {
 
-    private const val DEFAULT_BASE_URL = "https://delivery-server-mmdt.onrender.com/"
+    private const val DEFAULT_BASE_URL = BuildConfig.DEFAULT_BASE_URL
 
     private const val KEY_BASE_URL = "base_url"
     private const val KEY_API_KEY = "api_key"
@@ -21,11 +22,13 @@ object RetrofitClient {
     private var appContext: Context? = null
 
     private fun getSecurePrefs(context: Context): SharedPreferences {
-        val masterKey = MasterKeys.getOrCreate(MasterKeys.AES256_GCM_SPEC)
+        val masterKey = MasterKey.Builder(context)
+            .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
+            .build()
         return EncryptedSharedPreferences.create(
+            context,
             "secure_prefs",
             masterKey,
-            context,
             EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
             EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
         )

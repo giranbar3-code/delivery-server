@@ -19,11 +19,13 @@ android {
     buildTypes {
         debug {
             buildConfigField "String", "SETUP_KEY_HASH", "\"${project.findProperty("setupKeyHash") ?: "7ac3c5cc0fb2510140c7d1861db2e8d3d65f223bbd23fd254d584c81ab07b109"}\""
+            buildConfigField "String", "DEFAULT_BASE_URL", "\"${project.findProperty("defaultBaseUrl") ?: "https://delivery-server-mmdt.onrender.com/"}\""
         }
         release {
             minifyEnabled true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
             buildConfigField "String", "SETUP_KEY_HASH", "\"${project.findProperty("setupKeyHash") ?: "7ac3c5cc0fb2510140c7d1861db2e8d3d65f223bbd23fd254d584c81ab07b109"}\""
+            buildConfigField "String", "DEFAULT_BASE_URL", "\"${project.findProperty("defaultBaseUrl") ?: "https://delivery-server-mmdt.onrender.com/"}\""
         }
     }
 
@@ -68,7 +70,7 @@ dependencies {
     implementation 'androidx.documentfile:documentfile:1.0.1'
 
     // تشفير
-    implementation 'androidx.security:security-crypto:1.0.0'
+    implementation 'androidx.security:security-crypto:1.1.0-alpha06'
     implementation 'net.zetetic:android-database-sqlcipher:4.5.4'
     implementation 'androidx.sqlite:sqlite-ktx:2.4.0'
 
