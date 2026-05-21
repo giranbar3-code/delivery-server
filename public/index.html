@@ -136,6 +136,11 @@
                     <input type="tel" id="customerPhone" placeholder="09xxxxxxxx" required>
                 </div>
 
+                <!-- حقل وهمي للروبوتات -->
+                <div style="position:absolute;left:-9999px;opacity:0;height:0;overflow:hidden;">
+                    <input type="text" id="honeypot" tabindex="-1" autocomplete="off">
+                </div>
+
                 <!-- الأصناف المتعددة -->
                 <div class="section-title">🛒 الأصناف المطلوبة</div>
                 <div id="itemsContainer"></div>
@@ -146,8 +151,9 @@
                     <textarea id="address" placeholder="ادخل العنوان بالتفصيل" required></textarea>
                 </div>
                 <div class="form-group">
-                    <label>رابط الموقع (اختياري)</label>
-                    <input type="url" id="locationUrl" placeholder="الصق رابط Google Maps">
+                    <label>رابط الموقع <span class="required">*</span></label>
+                    <input type="text" id="locationUrl" placeholder="الصق رابط Google Maps" required inputmode="url">
+                    <small style="color:#999;font-size:12px;margin-top:4px;display:block;">افتح Google Maps → حدد موقعك → شارك الرابط</small>
                 </div>
                 <div class="form-group">
                     <label>ملاحظات (اختياري)</label>
@@ -166,6 +172,7 @@
 
     <script>
         document.getElementById('year').textContent = new Date().getFullYear();
+        const pageLoadTime = Date.now();
 
         let itemCount = 0;
 
@@ -197,8 +204,22 @@
 
         document.getElementById('orderForm').addEventListener('submit', async function(e) {
             e.preventDefault();
+
+            const form = document.getElementById('orderForm');
+            if (!form.checkValidity()) {
+                form.reportValidity();
+                return;
+            }
+
             const btn = document.getElementById('submitBtn');
             btn.disabled = true; btn.textContent = 'جارٍ الإرسال...';
+
+            const locationUrl = document.getElementById('locationUrl').value.trim();
+            if (!locationUrl || !/^https?:\/\//i.test(locationUrl)) {
+                alert('يرجى إدخال رابط الموقع من Google Maps\nيجب أن يبدأ الرابط بـ http:// أو https://');
+                btn.disabled = false; btn.textContent = '📩 إرسال الطلب';
+                return;
+            }
 
             // جمع الأصناف
             const itemRows = document.querySelectorAll('.item-row');
@@ -226,14 +247,18 @@
                 orderType: items.map(i => i.name).join('، '),
                 quantity: items.reduce((sum, i) => sum + i.quantity, 0),
                 deliveryAddress: document.getElementById('address').value.trim(),
-                locationUrl: document.getElementById('locationUrl').value.trim(),
-                notes: document.getElementById('notes').value.trim()
+                locationUrl: locationUrl,
+                notes: document.getElementById('notes').value.trim(),
+                honeypot: document.getElementById('honeypot').value.trim(),
+                pageLoad: pageLoadTime
             };
 
             try {
                 const res = await fetch('/api/orders', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: { 
+                        'Content-Type': 'application/json'
+                    },
                     body: JSON.stringify(data)
                 });
                 if (res.ok) {
