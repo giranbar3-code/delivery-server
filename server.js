@@ -43,13 +43,17 @@ app.use(helmet({
 const allowedOrigins = process.env.ALLOWED_ORIGINS
   ? process.env.ALLOWED_ORIGINS.split(',').map(s => s.trim())
   : [];
+const corsAllowAll = allowedOrigins.includes('*');
 app.use(cors({
   origin: (origin, callback) => {
-    if (!origin || allowedOrigins.length === 0 || allowedOrigins.includes(origin)) {
-      callback(null, true);
-    } else {
-      callback(null, false);
-    }
+    // بدون Origin (تطبيق Android، Postman، curl) — مسموح دائماً
+    if (!origin) return callback(null, true);
+    // التصريح الصريح بـ * — يسمح للكل
+    if (corsAllowAll) return callback(null, true);
+    // النطاق موجود في القائمة المسموحة
+    if (allowedOrigins.includes(origin)) return callback(null, true);
+    // غير مسموح
+    callback(null, false);
   }
 }));
 
