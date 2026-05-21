@@ -1,6 +1,6 @@
 package com.delivery.app.data
 
-import java.security.SecureRandom
+import com.delivery.app.BuildConfig
 import javax.crypto.SecretKeyFactory
 import javax.crypto.spec.PBEKeySpec
 
@@ -16,11 +16,9 @@ object SetupConfig {
         0x76, 0x87.toByte(), 0x98.toByte(), 0xA9.toByte()
     )
 
-    private const val SETUP_KEY_HASH_HEX = "7ac3c5cc0fb2510140c7d1861db2e8d3d65f223bbd23fd254d584c81ab07b109"
-
     fun verifySetupKey(input: String): Boolean {
         val hash = hashKey(input.trim())
-        return hash == SETUP_KEY_HASH_HEX
+        return hash == BuildConfig.SETUP_KEY_HASH
     }
 
     fun hashKey(key: String): String {
