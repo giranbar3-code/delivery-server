@@ -1,2 +1,11 @@
 node_modules/
 orders.json
+
+# Android
+DeliveryApp/.gradle/
+DeliveryApp/build/
+DeliveryApp/app/build/
+DeliveryApp/local.properties
+DeliveryApp/.idea/
+DeliveryApp/*.hprof
+*.iml

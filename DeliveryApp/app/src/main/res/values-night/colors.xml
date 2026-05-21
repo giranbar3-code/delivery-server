@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="surface_white">#1E1E2E</color>
+    <color name="background_grey">#121218</color>
+    <color name="divider">#2A2A3C</color>
+    <color name="text_primary">#E8E8F0</color>
+    <color name="text_secondary">#9E9EB8</color>
+    <color name="text_hint">#6B6B88</color>
+    <color name="primary_blue_light">#1A2A4A</color>
+    <color name="selection_highlight">#1A3A5A</color>
+    <color name="result_count_bg">#2A2A3C</color>
+</resources>

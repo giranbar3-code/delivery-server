@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="primary_blue">#1E88E5</color>
+    <color name="primary_blue_dark">#1565C0</color>
+    <color name="primary_blue_light">#E3F2FD</color>
+
+    <color name="surface_white">#FFFFFF</color>
+    <color name="background_grey">#F1F3F8</color>
+    <color name="divider">#E8ECF0</color>
+
+    <color name="text_primary">#1A1D29</color>
+    <color name="text_secondary">#64748B</color>
+    <color name="text_hint">#94A3B8</color>
+
+    <color name="status_pending">#F59E0B</color>
+    <color name="status_preparing">#3B82F6</color>
+    <color name="status_out_for_delivery">#8B5CF6</color>
+    <color name="status_delivered">#10B981</color>
+    <color name="status_returned">#F97316</color>
+    <color name="status_cancelled">#EF4444</color>
+
+    <color name="success">#10B981</color>
+    <color name="error">#EF4444</color>
+    <color name="warning">#F59E0B</color>
+
+    <color name="card_gradient_start">#1E88E5</color>
+    <color name="card_gradient_end">#1565C0</color>
+    <color name="selection_highlight">#E8F0FE</color>
+    <color name="revenue_purple">#7C3AED</color>
+    <color name="revenue_purple_dark">#6D28D9</color>
+    <color name="cost_orange">#EA580C</color>
+    <color name="profit_green">#059669</color>
+
+    <color name="white">#FFFFFF</color>
+    <color name="black">#FF000000</color>
+    <color name="result_count_bg">#E8EDF5</color>
+</resources>

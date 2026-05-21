@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>تقديم طلب توصيل</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', Tahoma, Arial, sans-serif;
+            background: #F5F7FA;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 16px;
+        }
+        .container {
+            max-width: 480px;
+            width: 100%;
+        }
+        .header {
+            background: #1565C0;
+            color: white;
+            padding: 20px;
+            border-radius: 16px 16px 0 0;
+            text-align: center;
+        }
+        .header h1 { font-size: 22px; margin-bottom: 4px; }
+        .header p { font-size: 14px; opacity: 0.9; }
+        .form-card {
+            background: white;
+            padding: 20px;
+            border-radius: 0 0 16px 16px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.08);
+        }
+        .form-group {
+            margin-bottom: 16px;
+        }
+        .form-group label {
+            display: block;
+            font-size: 14px;
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 6px;
+        }
+        .form-group label .required { color: #C62828; }
+        .form-group input, .form-group textarea, .form-group select {
+            width: 100%;
+            padding: 12px 14px;
+            font-size: 15px;
+            border: 1.5px solid #E0E0E0;
+            border-radius: 10px;
+            background: #FAFAFA;
+            transition: border-color 0.2s;
+            font-family: inherit;
+        }
+        .form-group input:focus, .form-group textarea:focus, .form-group select:focus {
+            outline: none;
+            border-color: #1565C0;
+            background: white;
+        }
+        .form-group textarea { resize: vertical; min-height: 60px; }
+        .form-row {
+            display: flex;
+            gap: 12px;
+        }
+        .form-row .form-group { flex: 1; }
+        .btn-submit {
+            width: 100%;
+            padding: 14px;
+            font-size: 17px;
+            font-weight: bold;
+            background: #25D366;
+            color: white;
+            border: none;
+            border-radius: 12px;
+            cursor: pointer;
+            transition: background 0.2s;
+            margin-top: 8px;
+        }
+        .btn-submit:hover { background: #1DA851; }
+        .btn-submit:disabled {
+            background: #A0A0A0;
+            cursor: not-allowed;
+        }
+        .footer {
+            text-align: center;
+            margin-top: 16px;
+            font-size: 12px;
+            color: #999;
+        }
+        .toast {
+            position: fixed;
+            bottom: 30px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: #333;
+            color: white;
+            padding: 12px 24px;
+            border-radius: 10px;
+            font-size: 14px;
+            opacity: 0;
+            transition: opacity 0.3s;
+            pointer-events: none;
+            white-space: nowrap;
+        }
+        .toast.show { opacity: 1; }
+        @media (max-width: 400px) {
+            .form-row { flex-direction: column; gap: 0; }
+            .header h1 { font-size: 18px; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>📦 طلب توصيل</h1>
+            <p>املأ النموذج وسيتم إرسال الطلب عبر واتساب</p>
+        </div>
+        <div class="form-card">
+            <form id="orderForm">
+                <div class="form-group">
+                    <label>اسم الزبون <span class="required">*</span></label>
+                    <input type="text" id="customerName" placeholder="ادخل اسمك" required>
+                </div>
+                <div class="form-group">
+                    <label>رقم الهاتف <span class="required">*</span></label>
+                    <input type="tel" id="customerPhone" placeholder="09xxxxxxxx" required>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>نوع الطلبية <span class="required">*</span></label>
+                        <input type="text" id="orderType" placeholder="مثل: أكل، مستلزمات..." required>
+                    </div>
+                    <div class="form-group">
+                        <label>الكمية <span class="required">*</span></label>
+                        <input type="number" id="quantity" placeholder="1" min="1" required>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>عنوان التوصيل <span class="required">*</span></label>
+                    <textarea id="address" placeholder="ادخل العنوان بالتفصيل" required></textarea>
+                </div>
+                <div class="form-group">
+                    <label>رابط الموقع (اختياري)</label>
+                    <input type="url" id="locationUrl" placeholder="الصق رابط Google Maps">
+                </div>
+                <div class="form-group">
+                    <label>ملاحظات (اختياري)</label>
+                    <textarea id="notes" placeholder="أي ملاحظات إضافية..."></textarea>
+                </div>
+                <button type="submit" class="btn-submit" id="submitBtn">📤 إرسال الطلب عبر واتساب</button>
+            </form>
+        </div>
+        <div class="footer">
+            جميع الحقوق محفوظة &copy; <span id="year"></span>
+        </div>
+    </div>
+    <div class="toast" id="toast"></div>
+    <script>
+        document.getElementById('year').textContent = new Date().getFullYear();
+
+        const WHATSAPP_NUMBER = '963900000000'; // ← غيّر هذا إلى رقمكم
+
+        function showToast(msg) {
+            const t = document.getElementById('toast');
+            t.textContent = msg; t.classList.add('show');
+            setTimeout(() => t.classList.remove('show'), 3000);
+        }
+
+        document.getElementById('orderForm').addEventListener('submit', function(e) {
+            e.preventDefault();
+            const btn = document.getElementById('submitBtn');
+            btn.disabled = true; btn.textContent = 'جارٍ الإرسال...';
+
+            const name = document.getElementById('customerName').value.trim();
+            const phone = document.getElementById('customerPhone').value.trim();
+            const type = document.getElementById('orderType').value.trim();
+            const qty = document.getElementById('quantity').value.trim();
+            const addr = document.getElementById('address').value.trim();
+            const loc = document.getElementById('locationUrl').value.trim();
+            const notes = document.getElementById('notes').value.trim();
+
+            let msg = `📦 *طلب توصية جديد*\n\n`;
+            msg += `👤 *الاسم:* ${name}\n`;
+            msg += `📞 *الهاتف:* ${phone}\n`;
+            msg += `📋 *النوع:* ${type}\n`;
+            msg += `🔢 *الكمية:* ${qty}\n`;
+            msg += `📍 *العنوان:* ${addr}\n`;
+            if (loc) msg += `🗺 *الموقع:* ${loc}\n`;
+            if (notes) msg += `📝 *ملاحظات:* ${notes}\n`;
+            msg += `\n⏰ ${new Date().toLocaleString('ar-SA')}`;
+
+            const encoded = encodeURIComponent(msg);
+            const url = `https://wa.me/${WHATSAPP_NUMBER}?text=${encoded}`;
+
+            setTimeout(() => {
+                window.open(url, '_blank');
+                btn.disabled = false; btn.textContent = '📤 إرسال الطلب عبر واتساب';
+                showToast('✅ تم فتح واتساب لإرسال الطلب');
+            }, 500);
+        });
+    </script>
+</body>
+</html>

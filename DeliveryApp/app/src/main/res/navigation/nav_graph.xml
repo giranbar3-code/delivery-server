@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="utf-8"?>
+<navigation xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/nav_graph"
+    app:startDestination="@id/archiveFragment">
+
+    <fragment
+        android:id="@+id/addOrderFragment"
+        android:name="com.delivery.app.ui.add.AddOrderFragment"
+        android:label="إضافة طلبية">
+        <argument
+            android:name="orderId"
+            app:argType="long"
+            android:defaultValue="-1L"/>
+    </fragment>
+
+    <fragment
+        android:id="@+id/archiveFragment"
+        android:name="com.delivery.app.ui.archive.ArchiveFragment"
+        android:label="الأرشيف"/>
+
+    <fragment
+        android:id="@+id/statsFragment"
+        android:name="com.delivery.app.ui.stats.StatsFragment"
+        android:label="التقارير"/>
+
+    <fragment
+        android:id="@+id/driversFragment"
+        android:name="com.delivery.app.ui.drivers.DriversFragment"
+        android:label="السائقون"/>
+
+    <fragment
+        android:id="@+id/customersFragment"
+        android:name="com.delivery.app.ui.customers.CustomersFragment"
+        android:label="العملاء"/>
+
+    <fragment
+        android:id="@+id/customerOrdersFragment"
+        android:name="com.delivery.app.ui.customers.CustomerOrdersFragment"
+        android:label="طلبات العميل">
+        <argument
+            android:name="customerName"
+            app:argType="string"
+            android:defaultValue=""/>
+    </fragment>
+
+    <!-- ✅ تصحيح: settingsFragment مُضاف بشكل صحيح -->
+    <fragment
+        android:id="@+id/settingsFragment"
+        android:name="com.delivery.app.ui.settings.SettingsFragment"
+        android:label="الإعدادات"/>
+
+    <action
+        android:id="@+id/action_archive_to_add"
+        app:destination="@id/addOrderFragment"
+        app:popUpTo="@id/archiveFragment"
+        app:popUpToInclusive="false"/>
+
+    <action
+        android:id="@+id/action_settings_to_customers"
+        app:destination="@id/customersFragment"/>
+
+</navigation>
