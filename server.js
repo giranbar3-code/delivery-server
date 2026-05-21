@@ -16,8 +16,24 @@ if (!API_KEY) {
   process.exit(1);
 }
 
-// رؤوس أمان
-app.use(helmet());
+// رؤوس أمان — مع السماح بالسكريبتات الداخلية لصفحة العميل
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      baseUri: ["'self'"],
+      fontSrc: ["'self'", "https:", "data:"],
+      formAction: ["'self'"],
+      frameAncestors: ["'self'"],
+      imgSrc: ["'self'", "data:"],
+      objectSrc: ["'none'"],
+      scriptSrc: ["'self'", "'unsafe-inline'"],
+      scriptSrcAttr: ["'none'"],
+      styleSrc: ["'self'", "https:", "'unsafe-inline'"],
+      upgradeInsecureRequests: [],
+    },
+  },
+}));
 
 // CORS مقيد — يسمح فقط للسيرفر نفسه (والنطاقات المحددة)
 const allowedOrigins = process.env.ALLOWED_ORIGINS
