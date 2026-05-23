@@ -4,13 +4,42 @@ const path = require('path');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const dns = require('dns');
+const crypto = require('crypto');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 const DATABASE_URL = process.env.DATABASE_URL;
 const API_KEY = process.env.API_KEY;
+const SITE_KEY = process.env.SITE_KEY || ''; // مفتاح إضافي للنموذج العام
+const SETUP_KEY_HASH = process.env.SETUP_KEY_HASH || '7ac3c5cc0fb2510140c7d1861db2e8d3d65f223bbd23fd254d584c81ab07b109';
+const SETUP_KEY_SALT = process.env.SETUP_KEY_SALT || '2a3b4c5d6e7f102132435465768798a9'; // hex
 const MAX_MEMORY_ORDERS = 500;
 const MAX_ORDERS_PER_PHONE_PER_HOUR = 5;
+const CSRF_TTL = 3600000; // 1 ساعة
+
+// تخزين مؤقت لرموز CSRF
+const csrfTokens = new Map();
+function generateCsrfToken() {
+  const token = crypto.randomBytes(32).toString('hex');
+  csrfTokens.set(token, Date.now());
+  // تنظيف الرموز منتهية الصلاحية كل 5 دقائق
+  if (csrfTokens.size % 50 === 0) {
+    const now = Date.now();
+    for (const [t, time] of csrfTokens) {
+      if (now - time > CSRF_TTL) csrfTokens.delete(t);
+    }
+  }
+  return token;
+}
+function validateCsrfToken(token) {
+  if (!token || !csrfTokens.has(token)) return false;
+  if (Date.now() - csrfTokens.get(token) > CSRF_TTL) {
+    csrfTokens.delete(token);
+    return false;
+  }
+  csrfTokens.delete(token); // استهلاك لمرة واحدة
+  return true;
+}
 
 if (!API_KEY) {
   console.error('❌ متغير API_KEY غير مضبوط — أوقف التشغيل');
@@ -73,11 +102,25 @@ const apiLimiter = rateLimit({
 });
 app.use('/api', apiLimiter);
 
+// Rate Limiting خاص بإنشاء الطلبات العامة — لكل IP
+const publicOrderLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 10,
+  message: { error: 'طلبات كثيرة جداً، حاول بعد دقيقة', code: 'RATE_LIMITED_IP' }
+});
+
 app.use(express.json({ limit: '1mb' }));
+
+// المسارات العامة التي لا تحتاج API Key
+const publicApiPaths = ['/api/status', '/api/csrf-token', '/api/verify-setup'];
+const isPublicPath = (req) => {
+  return publicApiPaths.includes(req.path) ||
+    (req.method === 'POST' && req.path === '/api/orders');
+};
 
 // التحقق من مفتاح API
 app.use((req, res, next) => {
-  if (req.path.startsWith('/api/') && req.path !== '/api/status' && !(req.method === 'POST' && req.path === '/api/orders')) {
+  if (req.path.startsWith('/api/') && !isPublicPath(req)) {
     const providedKey = req.headers['x-api-key'];
     if (!providedKey || providedKey !== API_KEY) {
       return res.status(401).json({ error: 'مفتاح API غير صالح' });
@@ -193,25 +236,71 @@ async function initDatabase(p) {
   }
 })();
 
+// نقطة لجلب رمز CSRF (للنماذج الديناميكية)
+app.get('/api/csrf-token', (req, res) => {
+  const token = generateCsrfToken();
+  res.json({ csrfToken: token, siteKey: SITE_KEY });
+});
+
 app.get('/', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+  const csrfToken = generateCsrfToken();
+  const fs = require('fs');
+  let html = fs.readFileSync(path.join(__dirname, 'public', 'index.html'), 'utf8');
+  html = html.replace(/\{\{CSRF_TOKEN\}\}/g, csrfToken);
+  html = html.replace(/\{\{SITE_KEY\}\}/g, SITE_KEY);
+  html = html.replace(/\{\{OFFICE_ID\}\}/g, '0');
+  res.send(html);
 });
 
 app.get('/office/:id', (req, res) => {
   const officeId = parseInt(req.params.id) || 0;
+  const csrfToken = generateCsrfToken();
   const fs = require('fs');
   let html = fs.readFileSync(path.join(__dirname, 'public', 'index.html'), 'utf8');
+  html = html.replace(/\{\{CSRF_TOKEN\}\}/g, csrfToken);
+  html = html.replace(/\{\{SITE_KEY\}\}/g, SITE_KEY);
   html = html.replace(/\{\{OFFICE_ID\}\}/g, officeId);
   res.send(html);
 });
 
 app.get('/api/status', (req, res) => {
-  res.json({ status: 'ok', db: useDb ? 'postgresql' : 'memory', orders: memoryOrders.length });
+  res.json({ status: 'ok' });
 });
 
-app.post('/api/orders', async (req, res) => {
+// التحقق من مفتاح التفعيل (جهة الخادم)
+app.post('/api/verify-setup', (req, res) => {
   try {
-    const { customerName, customerPhone, orderType, quantity, deliveryAddress, locationUrl, notes, items, honeypot, pageLoad, officeId } = req.body;
+    const { key } = req.body;
+    if (!key || typeof key !== 'string' || key.length > 100) {
+      return res.status(400).json({ valid: false, error: 'مفتاح غير صالح' });
+    }
+    const saltBytes = Buffer.from(SETUP_KEY_SALT, 'hex');
+    const derivedKey = crypto.pbkdf2Sync(key.trim(), saltBytes, 600000, 32, 'sha256');
+    const hashHex = derivedKey.toString('hex');
+    const valid = crypto.timingSafeEqual(
+      Buffer.from(hashHex, 'hex'),
+      Buffer.from(SETUP_KEY_HASH, 'hex')
+    );
+    res.json({ valid });
+  } catch (err) {
+    console.error('❌ فشل التحقق من مفتاح التفعيل:', err.message);
+    res.status(500).json({ valid: false, error: 'خطأ في الخادم' });
+  }
+});
+
+app.post('/api/orders', publicOrderLimiter, async (req, res) => {
+  try {
+    const { customerName, customerPhone, orderType, quantity, deliveryAddress, locationUrl, notes, items, honeypot, pageLoad, officeId, csrfToken, siteKey } = req.body;
+
+    // 🛡 التحقق من رمز CSRF
+    if (!validateCsrfToken(csrfToken)) {
+      return res.status(403).json({ error: 'رمز الأمان غير صالح أو منتهي الصلاحية', code: 'CSRF_INVALID' });
+    }
+
+    // 🛡 التحقق من مفتاح الموقع (اختياري عبر SITE_KEY)
+    if (SITE_KEY && siteKey !== SITE_KEY) {
+      return res.status(403).json({ error: 'مفتاح الموقع غير صالح', code: 'SITE_KEY_INVALID' });
+    }
 
     // 🛡 التحقق من الروبوتات
     if (honeypot) {
