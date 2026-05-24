@@ -12,6 +12,9 @@ class DriverRepository(private val dao: DriverDao) {
     fun getOrderCount(name: String, officeId: Long = 0): LiveData<Int> = dao.getOrderCount(name, officeId)
     fun getDeliveredCount(name: String, officeId: Long = 0): LiveData<Int> = dao.getDeliveredCount(name, officeId)
     fun getTotalRevenue(name: String, officeId: Long = 0): LiveData<Double?> = dao.getTotalRevenue(name, officeId)
+    suspend fun getDriversSync(officeId: Long = 0): List<Driver> =
+        dao.getDriversSync(officeId).map { Driver.decryptPii(it) }
+
     suspend fun insertDriver(driver: Driver) = dao.insertDriver(Driver.encryptPii(driver))
     suspend fun updateDriver(driver: Driver) = dao.updateDriver(Driver.encryptPii(driver))
     suspend fun deleteDriver(driver: Driver) = dao.deleteDriver(driver)

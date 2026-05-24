@@ -5,8 +5,59 @@ const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const dns = require('dns');
 const crypto = require('crypto');
+const http = require('http');
+const { WebSocketServer } = require('ws');
 
 const app = express();
+const server = http.createServer(app);
+const wss = new WebSocketServer({ server });
+
+// عملاء WebSocket حسب المكتب أو السائق
+const wsClients = new Map(); // officeId → Set<WebSocket>
+const wsDriverClients = new Map(); // driverPhone → Set<WebSocket>
+
+wss.on('connection', (ws, req) => {
+  const url = new URL(req.url, 'http://localhost');
+  const officeId = parseInt(url.searchParams.get('officeId')) || 0;
+  const driverPhone = url.searchParams.get('driverPhone') || '';
+
+  if (driverPhone) {
+    if (!wsDriverClients.has(driverPhone)) wsDriverClients.set(driverPhone, new Set());
+    wsDriverClients.get(driverPhone).add(ws);
+  } else {
+    if (!wsClients.has(officeId)) wsClients.set(officeId, new Set());
+    wsClients.get(officeId).add(ws);
+  }
+
+  ws.on('close', () => {
+    if (driverPhone) {
+      wsDriverClients.get(driverPhone)?.delete(ws);
+    } else {
+      wsClients.get(officeId)?.delete(ws);
+    }
+  });
+});
+
+function notifyClients(officeId, data) {
+  const clients = wsClients.get(officeId);
+  if (clients) {
+    const msg = JSON.stringify(data);
+    for (const ws of clients) {
+      if (ws.readyState === 1) ws.send(msg);
+    }
+  }
+}
+
+function notifyDriver(driverPhone, data) {
+  const clients = wsDriverClients.get(driverPhone);
+  if (clients) {
+    const msg = JSON.stringify(data);
+    for (const ws of clients) {
+      if (ws.readyState === 1) ws.send(msg);
+    }
+  }
+}
+
 const PORT = process.env.PORT || 3000;
 const DATABASE_URL = process.env.DATABASE_URL;
 const API_KEY = process.env.API_KEY;
@@ -115,7 +166,8 @@ app.use(express.json({ limit: '1mb' }));
 const publicApiPaths = ['/api/status', '/api/csrf-token', '/api/verify-setup'];
 const isPublicPath = (req) => {
   return publicApiPaths.includes(req.path) ||
-    (req.method === 'POST' && req.path === '/api/orders');
+    (req.method === 'POST' && req.path === '/api/orders') ||
+    req.path.startsWith('/api/driver/');
 };
 
 // التحقق من مفتاح API
@@ -133,6 +185,11 @@ let memoryOrders = [];
 let memoryId = 1;
 let useDb = false;
 let pool = null;
+
+// تخزين السائقين (للـ In-Memory)
+let memoryDrivers = []; // { id, name, phone, pinHash, officeId }
+let driverTokens = new Map(); // token → driverPhone
+let memoryDriverId = 1;
 
 // محاولة حل DNS لتشخيص المشكلة
 function resolveDbHost(url) {
@@ -191,11 +248,23 @@ async function initDatabase(p) {
       location_url TEXT DEFAULT '', notes TEXT DEFAULT '', items TEXT DEFAULT '[]',
       verified BOOLEAN DEFAULT false, client_ip TEXT DEFAULT '',
       synced BOOLEAN DEFAULT false, created_at TIMESTAMPTZ DEFAULT NOW(),
-      office_id BIGINT NOT NULL DEFAULT 0
+      office_id BIGINT NOT NULL DEFAULT 0,
+      driver_name TEXT DEFAULT '', driver_phone TEXT DEFAULT '',
+      delivery_status TEXT DEFAULT 'PENDING', purchase_price DOUBLE PRECISION DEFAULT 0,
+      delivery_price DOUBLE PRECISION DEFAULT 0
     )`);
-    // تأكد من وجود عمود office_id (للهجرة من الإصدارات القديمة)
-    await p.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS office_id BIGINT NOT NULL DEFAULT 0`)
-      .catch(e => {});
+    await p.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS office_id BIGINT NOT NULL DEFAULT 0`).catch(e => {});
+    await p.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS driver_name TEXT DEFAULT ''`).catch(e => {});
+    await p.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS driver_phone TEXT DEFAULT ''`).catch(e => {});
+    await p.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivery_status TEXT DEFAULT 'PENDING'`).catch(e => {});
+    await p.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS purchase_price DOUBLE PRECISION DEFAULT 0`).catch(e => {});
+    await p.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivery_price DOUBLE PRECISION DEFAULT 0`).catch(e => {});
+
+    // جدول السائقين
+    await p.query(`CREATE TABLE IF NOT EXISTS drivers (
+      id SERIAL PRIMARY KEY, name TEXT NOT NULL, phone TEXT NOT NULL UNIQUE,
+      pin_hash TEXT NOT NULL, office_id BIGINT NOT NULL DEFAULT 0, created_at TIMESTAMPTZ DEFAULT NOW()
+    )`);
     console.log('✅ جداول PostgreSQL جاهزة');
   } catch (e) {
     console.error('❌ فشل تهيئة الجداول:', e.message);
@@ -356,7 +425,9 @@ app.post('/api/orders', publicOrderLimiter, async (req, res) => {
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
         [customerName, customerPhone, finalOrderType, finalQuantity, deliveryAddress, locationUrl||'', notes||'', itemsJson, isVerified, clientIp, finalOfficeId]
       );
-      return res.status(201).json({ message: 'تم الاستلام', order: formatOrder(r.rows[0]) });
+      const order = formatOrder(r.rows[0]);
+      notifyClients(finalOfficeId, { type: 'new_order', order });
+      return res.status(201).json({ message: 'تم الاستلام', order });
     }
 
     const order = {
@@ -420,10 +491,301 @@ function formatOrder(row) {
     locationUrl: row.location_url||'', notes: row.notes||'', items,
     verified: row.verified || false, clientIp: row.client_ip || '',
     synced: row.synced, createdAt: row.created_at,
-    officeId: row.office_id || 0
+    officeId: row.office_id || 0,
+    driverName: row.driver_name || '', driverPhone: row.driver_phone || '',
+    deliveryStatus: row.delivery_status || 'PENDING',
+    purchasePrice: parseFloat(row.purchase_price) || 0,
+    deliveryPrice: parseFloat(row.delivery_price) || 0
   };
 }
 
-app.listen(PORT, '0.0.0.0', () => {
+// ════════════════════════════════════════════
+//  نقاط API خاصة بتطبيق السائق
+// ════════════════════════════════════════════
+
+// تسجيل سائق جديد (يستخدم من تطبيق المكتب لإضافة السائقين للخادم)
+app.post('/api/drivers', async (req, res) => {
+  try {
+    const { name, phone, pin, officeId } = req.body;
+    if (!name || !phone || !pin) {
+      return res.status(400).json({ error: 'الاسم، الهاتف والرمز السري مطلوب' });
+    }
+    const pinHash = crypto.createHash('sha256').update(pin).digest('hex');
+    const finalOfficeId = parseInt(officeId) || 0;
+
+    if (useDb) {
+      const existing = await pool.query('SELECT id FROM drivers WHERE phone = $1', [phone]);
+      if (existing.rows.length > 0) {
+        return res.status(409).json({ error: 'سائق بهذا الرقم موجود مسبقاً' });
+      }
+      const r = await pool.query(
+        'INSERT INTO drivers (name, phone, pin_hash, office_id) VALUES ($1,$2,$3,$4) RETURNING id, name, phone, office_id',
+        [name, phone, pinHash, finalOfficeId]
+      );
+      return res.status(201).json({ driver: r.rows[0] });
+    }
+
+    if (memoryDrivers.find(d => d.phone === phone)) {
+      return res.status(409).json({ error: 'سائق بهذا الرقم موجود مسبقاً' });
+    }
+    const driver = { id: memoryDriverId++, name, phone, pinHash, officeId: finalOfficeId };
+    memoryDrivers.push(driver);
+    res.status(201).json({ driver: { id: driver.id, name: driver.name, phone: driver.phone, office_id: driver.officeId } });
+  } catch (err) {
+    console.error(err); res.status(500).json({ error: 'خطأ في الخادم' });
+  }
+});
+
+// مصادقة السائق (تسجيل دخول)
+app.post('/api/driver/auth', async (req, res) => {
+  try {
+    const { phone, pin } = req.body;
+    if (!phone || !pin) {
+      return res.status(400).json({ error: 'رقم الهاتف والرمز السري مطلوب' });
+    }
+    const pinHash = crypto.createHash('sha256').update(pin).digest('hex');
+
+    let driver = null;
+    if (useDb) {
+      const r = await pool.query('SELECT id, name, phone, office_id FROM drivers WHERE phone = $1 AND pin_hash = $2', [phone, pinHash]);
+      if (r.rows.length === 0) return res.status(401).json({ error: 'رقم الهاتف أو الرمز السري خطأ' });
+      driver = r.rows[0];
+    } else {
+      driver = memoryDrivers.find(d => d.phone === phone && d.pinHash === pinHash);
+      if (!driver) return res.status(401).json({ error: 'رقم الهاتف أو الرمز السري خطأ' });
+      driver = { id: driver.id, name: driver.name, phone: driver.phone, office_id: driver.officeId };
+    }
+
+    // إنشاء رمز جلسة
+    const token = crypto.randomBytes(32).toString('hex');
+    driverTokens.set(token, phone);
+
+    res.json({ token, driver });
+  } catch (err) {
+    console.error(err); res.status(500).json({ error: 'خطأ في الخادم' });
+  }
+});
+
+// الحصول على طلبيات السائق
+app.get('/api/driver/orders', async (req, res) => {
+  try {
+    const token = req.headers['x-driver-token'];
+    if (!token || !driverTokens.has(token)) {
+      return res.status(401).json({ error: 'رمز جلسة غير صالح' });
+    }
+    const driverPhone = driverTokens.get(token);
+
+    let driver = null;
+    if (useDb) {
+      const r = await pool.query('SELECT id, name, phone, office_id FROM drivers WHERE phone = $1', [driverPhone]);
+      if (r.rows.length === 0) return res.status(401).json({ error: 'سائق غير موجود' });
+      driver = r.rows[0];
+    } else {
+      driver = memoryDrivers.find(d => d.phone === driverPhone);
+      if (!driver) return res.status(401).json({ error: 'سائق غير موجود' });
+    }
+
+    const driverName = driver.name || driver.name;
+
+    if (useDb) {
+      const r = await pool.query(
+        `SELECT * FROM orders WHERE driver_name = $1 AND delivery_status NOT IN ('DELIVERED','CANCELLED','RETURNED') ORDER BY 
+         CASE delivery_status 
+           WHEN 'OUT_FOR_DELIVERY' THEN 0
+           WHEN 'PREPARING' THEN 1
+           WHEN 'PENDING' THEN 2
+         END ASC, created_at DESC`,
+        [driverName]
+      );
+      return res.json(r.rows.map(formatOrder));
+    }
+
+    let orders = memoryOrders.filter(o =>
+      o.driverName === driverName &&
+      !['DELIVERED', 'CANCELLED', 'RETURNED'].includes(o.deliveryStatus || 'PENDING')
+    );
+    orders.sort((a, b) => {
+      const order = { OUT_FOR_DELIVERY: 0, PREPARING: 1, PENDING: 2 };
+      const sa = order[a.deliveryStatus || 'PENDING'] ?? 2;
+      const sb = order[b.deliveryStatus || 'PENDING'] ?? 2;
+      if (sa !== sb) return sa - sb;
+      return new Date(b.createdAt) - new Date(a.createdAt);
+    });
+    res.json(orders);
+  } catch (err) {
+    console.error(err); res.status(500).json({ error: 'خطأ في الخادم' });
+  }
+});
+
+// تحديث حالة طلبية من السائق
+app.put('/api/driver/orders/:id/status', async (req, res) => {
+  try {
+    const token = req.headers['x-driver-token'];
+    if (!token || !driverTokens.has(token)) {
+      return res.status(401).json({ error: 'رمز جلسة غير صالح' });
+    }
+    const { status } = req.body;
+    const validStatuses = ['PREPARING', 'OUT_FOR_DELIVERY', 'DELIVERED', 'RETURNED'];
+    if (!validStatuses.includes(status)) {
+      return res.status(400).json({ error: 'حالة غير صالحة', validStatuses });
+    }
+    const orderId = parseInt(req.params.id);
+
+    if (useDb) {
+      const r = await pool.query(
+        'UPDATE orders SET delivery_status = $1 WHERE id = $2 AND delivery_status NOT IN ($3,$4) RETURNING *',
+        [status, orderId, 'DELIVERED', 'CANCELLED']
+      );
+      if (r.rows.length === 0) return res.status(404).json({ error: 'الطلبية غير موجودة أو مكتملة' });
+      const order = formatOrder(r.rows[0]);
+      notifyClients(order.officeId || 0, { type: 'status_update', order });
+      return res.json({ order });
+    }
+
+    const idx = memoryOrders.findIndex(o => o.id === orderId && !['DELIVERED', 'CANCELLED'].includes(o.deliveryStatus || 'PENDING'));
+    if (idx === -1) return res.status(404).json({ error: 'الطلبية غير موجودة أو مكتملة' });
+    memoryOrders[idx].deliveryStatus = status;
+    const order = memoryOrders[idx];
+    notifyClients(order.officeId || 0, { type: 'status_update', order });
+    res.json({ order });
+  } catch (err) {
+    console.error(err); res.status(500).json({ error: 'خطأ في الخادم' });
+  }
+});
+
+// تحديث معلومات السائق (من تطبيق المكتب)
+app.put('/api/drivers/:id', async (req, res) => {
+  try {
+    const { name, phone, pin } = req.body;
+    const driverId = parseInt(req.params.id);
+
+    if (useDb) {
+      let query = 'UPDATE drivers SET';
+      const params = [];
+      const updates = [];
+      if (name) { updates.push('name = $' + (params.length + 1)); params.push(name); }
+      if (phone) { updates.push('phone = $' + (params.length + 1)); params.push(phone); }
+      if (pin) { updates.push('pin_hash = $' + (params.length + 1)); params.push(crypto.createHash('sha256').update(pin).digest('hex')); }
+      if (updates.length === 0) return res.status(400).json({ error: 'لا توجد بيانات للتحديث' });
+      query += ' ' + updates.join(', ') + ' WHERE id = $' + (params.length + 1) + ' RETURNING id, name, phone, office_id';
+      params.push(driverId);
+      const r = await pool.query(query, params);
+      if (r.rows.length === 0) return res.status(404).json({ error: 'سائق غير موجود' });
+      return res.json({ driver: r.rows[0] });
+    }
+
+    const driver = memoryDrivers.find(d => d.id === driverId);
+    if (!driver) return res.status(404).json({ error: 'سائق غير موجود' });
+    if (name) driver.name = name;
+    if (phone) driver.phone = phone;
+    if (pin) driver.pinHash = crypto.createHash('sha256').update(pin).digest('hex');
+    res.json({ driver: { id: driver.id, name: driver.name, phone: driver.phone, office_id: driver.officeId } });
+  } catch (err) {
+    console.error(err); res.status(500).json({ error: 'خطأ في الخادم' });
+  }
+});
+
+// الحصول على قائمة السائقين (لمكتب)
+app.get('/api/drivers', async (req, res) => {
+  try {
+    const officeId = parseInt(req.query.officeId) || 0;
+    if (useDb) {
+      const query = officeId > 0
+        ? 'SELECT id, name, phone, office_id FROM drivers WHERE office_id = $1 ORDER BY name'
+        : 'SELECT id, name, phone, office_id FROM drivers ORDER BY name';
+      const params = officeId > 0 ? [officeId] : [];
+      const r = await pool.query(query, params);
+      return res.json(r.rows);
+    }
+    let drivers = memoryDrivers;
+    if (officeId > 0) drivers = drivers.filter(d => d.officeId === officeId);
+    res.json(drivers.map(d => ({ id: d.id, name: d.name, phone: d.phone, office_id: d.officeId })));
+  } catch (err) {
+    console.error(err); res.status(500).json({ error: 'خطأ في الخادم' });
+  }
+});
+
+// تعيين سائق لطلبية (من تطبيق المكتب)
+app.put('/api/orders/:id/driver', async (req, res) => {
+  try {
+    const orderId = parseInt(req.params.id);
+    const { driverName, driverPhone } = req.body;
+
+    if (useDb) {
+      const r = await pool.query(
+        'UPDATE orders SET driver_name = $1, driver_phone = $2 WHERE id = $3 RETURNING *',
+        [driverName || '', driverPhone || '', orderId]
+      );
+      if (r.rows.length === 0) return res.status(404).json({ error: 'طلبية غير موجودة' });
+      const order = formatOrder(r.rows[0]);
+      // إشعار السائق
+      if (driverPhone) notifyDriver(driverPhone, { type: 'new_assignment', order });
+      notifyClients(order.officeId || 0, { type: 'status_update', order });
+      return res.json({ order });
+    }
+
+    const idx = memoryOrders.findIndex(o => o.id === orderId);
+    if (idx === -1) return res.status(404).json({ error: 'طلبية غير موجودة' });
+    memoryOrders[idx].driverName = driverName || '';
+    memoryOrders[idx].driverPhone = driverPhone || '';
+    const order = memoryOrders[idx];
+    if (driverPhone) notifyDriver(driverPhone, { type: 'new_assignment', order });
+    notifyClients(order.officeId || 0, { type: 'status_update', order });
+    res.json({ order });
+  } catch (err) {
+    console.error(err); res.status(500).json({ error: 'خطأ في الخادم' });
+  }
+});
+
+// تحديث حالة طلبية من المكتب (مع إشعار للسائق)
+app.put('/api/orders/:id/status', async (req, res) => {
+  try {
+    const orderId = parseInt(req.params.id);
+    const { status } = req.body;
+    const validStatuses = ['PENDING', 'PREPARING', 'OUT_FOR_DELIVERY', 'DELIVERED', 'RETURNED', 'CANCELLED'];
+    if (!validStatuses.includes(status)) {
+      return res.status(400).json({ error: 'حالة غير صالحة' });
+    }
+
+    if (useDb) {
+      const r = await pool.query('UPDATE orders SET delivery_status = $1 WHERE id = $2 RETURNING *', [status, orderId]);
+      if (r.rows.length === 0) return res.status(404).json({ error: 'طلبية غير موجودة' });
+      const order = formatOrder(r.rows[0]);
+      notifyClients(order.officeId || 0, { type: 'status_update', order });
+      if (order.driverPhone) notifyDriver(order.driverPhone, { type: 'status_update', order });
+      return res.json({ order });
+    }
+
+    const idx = memoryOrders.findIndex(o => o.id === orderId);
+    if (idx === -1) return res.status(404).json({ error: 'طلبية غير موجودة' });
+    memoryOrders[idx].deliveryStatus = status;
+    const order = memoryOrders[idx];
+    notifyClients(order.officeId || 0, { type: 'status_update', order });
+    if (order.driverPhone) notifyDriver(order.driverPhone, { type: 'status_update', order });
+    res.json({ order });
+  } catch (err) {
+    console.error(err); res.status(500).json({ error: 'خطأ في الخادم' });
+  }
+});
+
+// حذف سائق
+app.delete('/api/drivers/:id', async (req, res) => {
+  try {
+    const driverId = parseInt(req.params.id);
+    if (useDb) {
+      const r = await pool.query('DELETE FROM drivers WHERE id = $1 RETURNING id', [driverId]);
+      if (r.rows.length === 0) return res.status(404).json({ error: 'سائق غير موجود' });
+      return res.json({ message: 'تم الحذف' });
+    }
+    const idx = memoryDrivers.findIndex(d => d.id === driverId);
+    if (idx === -1) return res.status(404).json({ error: 'سائق غير موجود' });
+    memoryDrivers.splice(idx, 1);
+    res.json({ message: 'تم الحذف' });
+  } catch (err) {
+    console.error(err); res.status(500).json({ error: 'خطأ في الخادم' });
+  }
+});
+
+server.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 Server running on port ${PORT} (${useDb ? 'PostgreSQL' : 'In-Memory'})`);
 });

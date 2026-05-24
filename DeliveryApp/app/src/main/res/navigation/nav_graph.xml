@@ -60,4 +60,13 @@
         android:id="@+id/action_settings_to_customers"
         app:destination="@id/customersFragment"/>
 
+    <fragment
+        android:id="@+id/logsFragment"
+        android:name="com.delivery.app.ui.logs.LogsFragment"
+        android:label="سجل الأخطاء"/>
+
+    <action
+        android:id="@+id/action_settings_to_logs"
+        app:destination="@id/logsFragment"/>
+
 </navigation>

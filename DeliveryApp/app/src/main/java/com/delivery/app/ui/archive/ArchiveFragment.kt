@@ -16,8 +16,11 @@ import androidx.navigation.fragment.findNavController
 import androidx.recyclerview.widget.LinearLayoutManager
 import com.delivery.app.DeliveryApplication
 import com.delivery.app.R
+import com.delivery.app.data.OfficeManager
+import com.delivery.app.data.model.DeliveryStatus
 import com.delivery.app.data.model.Driver
 import com.delivery.app.data.model.Order
+import com.delivery.app.data.model.StatusHistory
 import com.delivery.app.data.repository.SyncManager
 import com.delivery.app.databinding.FragmentArchiveBinding
 import com.delivery.app.ui.OrderViewModel
@@ -120,7 +123,8 @@ class ArchiveFragment : Fragment() {
                 viewModel.setStatus(order, newStatus)
             },
             onPrint = { order -> printReceipt(order) },
-            onAssignDriver = { order -> showDriverSelectionDialog(order) }
+            onAssignDriver = { order -> showDriverSelectionDialog(order) },
+            onShowStatusHistory = { order -> showStatusHistoryDialog(order) }
         )
         binding.recyclerOrders.layoutManager = LinearLayoutManager(requireContext())
         binding.recyclerOrders.adapter = adapter
@@ -227,103 +231,154 @@ class ArchiveFragment : Fragment() {
 
     private fun printReceipt(order: Order) {
         val context = requireContext()
+        val app = requireActivity().application as DeliveryApplication
         val printManager = context.getSystemService(android.content.Context.PRINT_SERVICE) as PrintManager
 
-        val itemsText = try {
-            val arr = org.json.JSONArray(order.items)
-            (0 until arr.length()).joinToString("\n") { i ->
-                val item = arr.getJSONObject(i)
-                "- ${item.optString("name", "")} ×${item.optInt("quantity", 1)}"
+        lifecycleScope.launch {
+            val officeId = OfficeManager.currentOfficeId.value ?: 0L
+            val officeName = withContext(Dispatchers.IO) {
+                app.officeRepository.getOfficeByIdSync(officeId)?.name ?: "مكتب التوصيل"
             }
-        } catch (e: Exception) { order.orderType }
 
-        val receiptText = buildString {
-            appendLine("╔══════════════════════════╗")
-            appendLine("║     مكتب التوصيل         ║")
-            appendLine("╚══════════════════════════╝")
-            appendLine()
-            appendLine("الطلبية رقم: #${order.orderNumber}")
-            appendLine("التاريخ: ${SimpleDateFormat("dd/MM/yyyy HH:mm", Locale.getDefault()).format(Date(order.createdAt))}")
-            appendLine()
-            appendLine("الزبون: ${order.customerName}")
-            appendLine("الهاتف: ****${order.customerPhone.takeLast(4)}")
-            appendLine("العنوان: ${order.deliveryAddress}")
-            appendLine()
-            appendLine("المواد:")
-            appendLine(itemsText)
-            appendLine()
-            appendLine("سعر الشراء: ${order.purchasePrice} ل.س")
-            appendLine("أجرة التوصيل: ${order.deliveryPrice} ل.س")
-            if (order.driverName.isNotEmpty()) {
-                appendLine("السائق: ${order.driverName}")
-            }
-            if (order.notes.isNotEmpty()) {
+            val itemsText = try {
+                val arr = org.json.JSONArray(order.items)
+                (0 until arr.length()).joinToString("\n") { i ->
+                    val item = arr.getJSONObject(i)
+                    "• ${item.optString("name", "")} ×${item.optInt("quantity", 1)}"
+                }
+            } catch (e: Exception) { order.orderType }
+
+            val receiptText = buildString {
+                appendLine("╔══════════════════════════════════╗")
+                appendLine("║          $officeName            ║")
+                appendLine("║       فاتورة توصيل - ديليفرو    ║")
+                appendLine("╚══════════════════════════════════╝")
                 appendLine()
-                appendLine("ملاحظات: ${order.notes}")
+                appendLine("رقم الفاتورة: #${order.orderNumber}")
+                appendLine("التاريخ: ${SimpleDateFormat("dd/MM/yyyy  hh:mm a", Locale("ar")).format(Date(order.createdAt))}")
+                appendLine("الحالة: ${order.statusEnum.emoji} ${order.statusEnum.label}")
+                appendLine()
+                appendLine("━━━ بيانات الزبون ━━━")
+                appendLine("الاسم: ${order.customerName}")
+                appendLine("الهاتف: ${order.customerPhone}")
+                appendLine("العنوان: ${order.deliveryAddress}")
+                appendLine()
+                appendLine("━━━ المواد ━━━")
+                appendLine(itemsText)
+                if (order.notes.isNotEmpty()) {
+                    appendLine()
+                    appendLine("ملاحظات: ${order.notes}")
+                }
+                appendLine()
+                appendLine("────────────────────────────")
+                appendLine("سعر الشراء:     ${order.purchasePrice.format()} ل.س")
+                appendLine("أجرة التوصيل:   ${order.deliveryPrice.format()} ل.س")
+                val total = order.purchasePrice + order.deliveryPrice
+                appendLine("الإجمالي:       ${total.format()} ل.س")
+                if (order.driverName.isNotEmpty()) {
+                    appendLine()
+                    appendLine("السائق: ${order.driverName}")
+                }
+                appendLine()
+                appendLine("══════════════════════════════════")
+                appendLine("شكراً لتعاملكم 🤝")
+                appendLine("تمت الطباعة: ${SimpleDateFormat("dd/MM/yyyy  hh:mm a", Locale("ar")).format(Date())}")
             }
-            appendLine()
-            appendLine("الحالة: ${order.statusEnum.emoji} ${order.statusEnum.label}")
-            appendLine()
-            appendLine("══════════════════════════")
-            appendLine("شكراً لتعاملكم 🤝")
-        }
 
-        val title = "وصل_توصيل_${order.orderNumber}"
-        try {
-            val docAdapter = object : PrintDocumentAdapter() {
-                override fun onWrite(
-                    pages: Array<android.print.PageRange>?,
-                    destination: android.os.ParcelFileDescriptor?,
-                    cancellationSignal: android.os.CancellationSignal?,
-                    callback: PrintDocumentAdapter.WriteResultCallback?
-                ) {
-                    val pdfDocument = android.graphics.pdf.PdfDocument()
-                    val paint = android.graphics.Paint().apply {
-                        textSize = 28f
-                        color = android.graphics.Color.BLACK
-                        textAlign = android.graphics.Paint.Align.RIGHT
-                    }
-                    val pageInfo = android.graphics.pdf.PdfDocument.PageInfo.Builder(800, 1000, 1).create()
-                    val page = pdfDocument.startPage(pageInfo)
-                    val canvas = page.canvas
-                    var y = 50f
-                    val rightX = canvas.width - 50f
-                    receiptText.lines().forEach { line ->
-                        if (y > canvas.height - 50) return@forEach
-                        canvas.drawText(line, rightX, y, paint)
-                        y += paint.textSize + 8f
-                    }
-                    pdfDocument.finishPage(page)
-                    try {
-                        destination?.let {
-                            java.io.FileOutputStream(it.fileDescriptor).use { fos ->
-                                pdfDocument.writeTo(fos)
+            val title = "فاتورة_${order.orderNumber}"
+            try {
+                val docAdapter = object : PrintDocumentAdapter() {
+                    override fun onWrite(
+                        pages: Array<android.print.PageRange>?,
+                        destination: android.os.ParcelFileDescriptor?,
+                        cancellationSignal: android.os.CancellationSignal?,
+                        callback: PrintDocumentAdapter.WriteResultCallback?
+                    ) {
+                        val pdfDocument = android.graphics.pdf.PdfDocument()
+                        val headerPaint = android.graphics.Paint().apply {
+                            textSize = 36f
+                            color = android.graphics.Color.DKGRAY
+                            textAlign = android.graphics.Paint.Align.RIGHT
+                            isFakeBoldText = true
+                        }
+                        val bodyPaint = android.graphics.Paint().apply {
+                            textSize = 28f
+                            color = android.graphics.Color.BLACK
+                            textAlign = android.graphics.Paint.Align.RIGHT
+                        }
+                        val smallPaint = android.graphics.Paint().apply {
+                            textSize = 22f
+                            color = android.graphics.Color.GRAY
+                            textAlign = android.graphics.Paint.Align.RIGHT
+                        }
+                        val linePaint = android.graphics.Paint().apply {
+                            color = android.graphics.Color.LTGRAY
+                            strokeWidth = 1.5f
+                        }
+                        val pageInfo = android.graphics.pdf.PdfDocument.PageInfo.Builder(800, 1200, 1).create()
+                        val page = pdfDocument.startPage(pageInfo)
+                        val canvas = page.canvas
+                        val rightX = canvas.width - 40f
+                        val leftX = 40f
+
+                        var y = 50f
+                        val lines = receiptText.lines()
+                        for (line in lines) {
+                            if (y > canvas.height - 60f) break
+                            val paint = when {
+                                line.startsWith("║") && y < 140f -> headerPaint
+                                line.startsWith("━") || line.startsWith("═") || line.startsWith("─") -> smallPaint.apply { color = android.graphics.Color.GRAY }
+                                else -> bodyPaint
+                            }
+                            // خط فاصل
+                            if (line.startsWith("━━━") || line.startsWith("════") || line.startsWith("────")) {
+                                y += 4f
+                                canvas.drawLine(leftX, y, rightX, y, linePaint)
+                                y += paint.textSize + 8f
+                            } else {
+                                canvas.drawText(line, rightX, y, paint)
+                                y += paint.textSize + 8f
                             }
                         }
-                    } catch (_: Exception) {}
-                    pdfDocument.close()
-                    callback?.onWriteFinished(arrayOf(android.print.PageRange(0, 0)))
-                }
 
-                override fun onLayout(
-                    oldAttributes: PrintAttributes?,
-                    newAttributes: PrintAttributes?,
-                    cancellationSignal: android.os.CancellationSignal?,
-                    callback: PrintDocumentAdapter.LayoutResultCallback?,
-                    metadata: android.os.Bundle?
-                ) {
-                    callback?.onLayoutFinished(
-                        android.print.PrintDocumentInfo.Builder(title)
-                            .setContentType(android.print.PrintDocumentInfo.CONTENT_TYPE_DOCUMENT)
-                            .setPageCount(1)
-                            .build(), true
-                    )
+                        pdfDocument.finishPage(page)
+                        try {
+                            destination?.let {
+                                java.io.FileOutputStream(it.fileDescriptor).use { fos ->
+                                    pdfDocument.writeTo(fos)
+                                }
+                            }
+                        } catch (_: Exception) {}
+                        pdfDocument.close()
+                        callback?.onWriteFinished(arrayOf(android.print.PageRange(0, 0)))
+                    }
+
+                    override fun onLayout(
+                        oldAttributes: PrintAttributes?,
+                        newAttributes: PrintAttributes?,
+                        cancellationSignal: android.os.CancellationSignal?,
+                        callback: PrintDocumentAdapter.LayoutResultCallback?,
+                        metadata: android.os.Bundle?
+                    ) {
+                        callback?.onLayoutFinished(
+                            android.print.PrintDocumentInfo.Builder(title)
+                                .setContentType(android.print.PrintDocumentInfo.CONTENT_TYPE_DOCUMENT)
+                                .setPageCount(1)
+                                .build(), true
+                        )
+                    }
+                }
+                printManager.print(title, docAdapter, PrintAttributes.Builder().build())
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(context, "تعذّرت الطباعة", Toast.LENGTH_SHORT).show()
                 }
             }
-            printManager.print(title, docAdapter, PrintAttributes.Builder().build())
-        } catch (e: Exception) {
-            Toast.makeText(context, "تعذّرت الطباعة", Toast.LENGTH_SHORT).show()
         }
+    }
+
+    private fun Double.format(): String {
+        return if (this == this.toLong().toDouble()) this.toLong().toString() else String.format("%.2f", this)
     }
 
     private fun deleteWithUndo(order: Order) {
@@ -412,5 +467,33 @@ class ArchiveFragment : Fragment() {
         pendingDeletes.values.forEach { it.cancel() }
         pendingDeletes.clear()
         _binding = null
+    }
+
+    private fun showStatusHistoryDialog(order: Order) {
+        val app = requireActivity().application as DeliveryApplication
+        val dao = app.database.statusHistoryDao()
+        dao.getByOrderId(order.id).observe(viewLifecycleOwner) { history ->
+            if (history.isEmpty()) {
+                Toast.makeText(requireContext(), "لا يوجد سجل تغييرات لهذه الطلبية", Toast.LENGTH_SHORT).show()
+                return@observe
+            }
+            val timeFormat = SimpleDateFormat("hh:mm a", Locale("ar"))
+            val dateFormat = SimpleDateFormat("dd/MM - hh:mm a", Locale("ar"))
+            val now = System.currentTimeMillis()
+            val lines = history.map { h ->
+                val fromLabel = try { DeliveryStatus.valueOf(h.fromStatus).label } catch (e: Exception) { h.fromStatus }
+                val toLabel = try { DeliveryStatus.valueOf(h.toStatus).label } catch (e: Exception) { h.toStatus }
+                val time = when {
+                    now - h.changedAt < 86400_000 -> timeFormat.format(Date(h.changedAt))
+                    else -> dateFormat.format(Date(h.changedAt))
+                }
+                "$time: $fromLabel → $toLabel"
+            }
+            AlertDialog.Builder(requireContext())
+                .setTitle("سجل تغييرات الطلبية #${order.orderNumber}")
+                .setItems(lines.toTypedArray(), null)
+                .setPositiveButton("إغلاق") { d, _ -> d.dismiss() }
+                .show()
+        }
     }
 }

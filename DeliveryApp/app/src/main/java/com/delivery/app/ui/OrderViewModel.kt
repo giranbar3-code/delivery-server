@@ -5,8 +5,10 @@ import androidx.lifecycle.*
 import com.delivery.app.DeliveryApplication
 import com.delivery.app.data.OfficeManager
 import com.delivery.app.data.local.DriverStat
+import com.delivery.app.data.local.StatusHistoryDao
 import com.delivery.app.data.model.DeliveryStatus
 import com.delivery.app.data.model.Order
+import com.delivery.app.data.model.StatusHistory
 import com.delivery.app.data.repository.OrderRepository
 import kotlinx.coroutines.launch
 import java.util.Calendar
@@ -23,6 +25,8 @@ class OrderViewModel(application: Application) : AndroidViewModel(application) {
 
     private val repository: OrderRepository =
         (application as DeliveryApplication).repository
+    private val statusHistoryDao: StatusHistoryDao =
+        (application as DeliveryApplication).statusHistoryDao
 
     // ===== فلتر الأرشيف =====
     private val _archiveFilter = MutableLiveData(ArchiveFilter())
@@ -152,16 +156,29 @@ class OrderViewModel(application: Application) : AndroidViewModel(application) {
             DeliveryStatus.PENDING        -> DeliveryStatus.PREPARING
             DeliveryStatus.PREPARING      -> DeliveryStatus.OUT_FOR_DELIVERY
             DeliveryStatus.OUT_FOR_DELIVERY -> DeliveryStatus.DELIVERED
-            DeliveryStatus.DELIVERED      -> DeliveryStatus.PENDING   // إعادة تدوير
+            DeliveryStatus.DELIVERED      -> DeliveryStatus.PENDING
             DeliveryStatus.RETURNED       -> DeliveryStatus.PENDING
             DeliveryStatus.CANCELLED      -> DeliveryStatus.PENDING
         }
-        repository.updateOrder(order.copy(deliveryStatus = next.name))
+        val updated = order.copy(deliveryStatus = next.name)
+        repository.updateOrder(updated)
+        statusHistoryDao.insert(StatusHistory(
+            orderId = order.id,
+            fromStatus = order.deliveryStatus,
+            toStatus = next.name
+        ))
     }
 
     // ✅ تعيين حالة محددة مباشرة (من قائمة الحالات)
     fun setStatus(order: Order, status: DeliveryStatus) = viewModelScope.launch {
-        repository.updateOrder(order.copy(deliveryStatus = status.name))
+        if (order.deliveryStatus == status.name) return@launch
+        val updated = order.copy(deliveryStatus = status.name)
+        repository.updateOrder(updated)
+        statusHistoryDao.insert(StatusHistory(
+            orderId = order.id,
+            fromStatus = order.deliveryStatus,
+            toStatus = status.name
+        ))
     }
 
     fun importOrders(orders: List<Order>) = viewModelScope.launch {

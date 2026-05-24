@@ -1,7 +1,9 @@
 package com.delivery.app.ui.archive
 
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.util.Log
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
@@ -28,7 +30,8 @@ class OrderAdapter(
     private val onDelete: (Order) -> Unit,
     private val onStatusChange: (Order, DeliveryStatus) -> Unit,
     private val onPrint: ((Order) -> Unit)? = null,
-    private val onAssignDriver: ((Order) -> Unit)? = null
+    private val onAssignDriver: ((Order) -> Unit)? = null,
+    private val onShowStatusHistory: ((Order) -> Unit)? = null
 ) : ListAdapter<Order, OrderAdapter.OrderViewHolder>(DiffCallback) {
 
     private val fullDateFormat = SimpleDateFormat("dd/MM/yyyy - hh:mm a", Locale.getDefault())
@@ -112,28 +115,23 @@ class OrderAdapter(
                 ContextCompat.getDrawable(binding.root.context, android.R.drawable.ic_menu_compass), null, null, null
             )
 
-            // ✅ رقم الزبون — مقنّع افتراضياً، ضغطة تكشفه
+            // ✅ رقم الزبون — اتصال + واتساب (فقط للطلبيات غير المكتملة)
+            val isCompleted = order.deliveryStatus in listOf("DELIVERED", "RETURNED", "CANCELLED")
             if (order.customerPhone.isNotEmpty()) {
                 binding.rowPhone.visibility = View.VISIBLE
-                val maskedPhone = "****${order.customerPhone.takeLast(4)}"
-                binding.tvPhone.text = "📞 $maskedPhone"
-
-                var showingFull = false
-                binding.tvPhone.setOnClickListener {
-                    showingFull = !showingFull
-                    binding.tvPhone.text = if (showingFull) "📞 ${order.customerPhone}" else "📞 $maskedPhone"
-                }
+                binding.tvPhone.text = "📞 ${order.customerPhone}"
 
                 binding.btnCall.setOnClickListener {
                     val intent = Intent(Intent.ACTION_DIAL, Uri.parse("tel:${order.customerPhone}"))
                     binding.root.context.startActivity(intent)
                 }
 
+                binding.btnWhatsappCustomer.visibility = if (isCompleted) View.GONE else View.VISIBLE
                 binding.btnWhatsappCustomer.setOnClickListener {
                     openWhatsApp(order.customerPhone)
                 }
 
-                binding.btnNotifyWhatsapp.visibility = View.VISIBLE
+                binding.btnNotifyWhatsapp.visibility = if (isCompleted) View.GONE else View.VISIBLE
                 binding.btnNotifyWhatsapp.setOnClickListener {
                     notifyCustomerViaWhatsApp(order)
                 }
@@ -152,13 +150,13 @@ class OrderAdapter(
                 binding.btnOpenMap.visibility = View.GONE
             }
 
-            // ✅ السائق + واتساب السائق
+            // ✅ السائق + واتساب السائق (فقط للطلبيات غير المكتملة)
             if (order.driverName.isNotEmpty()) {
                 binding.rowDriver.visibility = View.VISIBLE
                 binding.tvDriver.text = "السائق: ${order.driverName}"
 
                 val driverPhone = driverPhoneMap[order.driverName]
-                if (driverPhone != null) {
+                if (driverPhone != null && !isCompleted) {
                     binding.btnWhatsappDriver.visibility = View.VISIBLE
                     binding.btnWhatsappDriver.setOnClickListener { sendOrderToDriverWhatsApp(order, driverPhone) }
                 } else {
@@ -193,6 +191,10 @@ class OrderAdapter(
             binding.tvStatus.setOnClickListener {
                 showStatusDialog(order)
             }
+            binding.tvStatus.setOnLongClickListener {
+                onShowStatusHistory?.invoke(order)
+                true
+            }
 
             // ✅ checkbox للتحديد المتعدد
             val isSelected = selectedIds.contains(order.id)
@@ -226,30 +228,26 @@ class OrderAdapter(
         }
 
         // ✅ فتح واتساب برقم الهاتف
-        private fun statusToMessage(order: Order): String {
-            val status = order.statusEnum
-            val lines = listOf(
-                "🛵 *مكتب التوصيل*",
-                "",
-                "📋 الطلبية رقم #${order.orderNumber}",
-                "👤 ${order.customerName}",
-                "📍 ${order.deliveryAddress}",
-                "📦 الحالة: ${status.emoji} ${status.label}",
-                "",
-                "📅 ${fullDateFormat.format(Date(order.createdAt))}",
-                "",
-                "شكراً لتعاملكم 🤝"
-            )
-            return lines.joinToString("\n")
-        }
-
         private fun notifyCustomerViaWhatsApp(order: Order) {
             val context = binding.root.context
             if (order.customerPhone.isEmpty()) {
                 Toast.makeText(context, "لا يوجد رقم هاتف للزبون", Toast.LENGTH_SHORT).show()
                 return
             }
-            val message = statusToMessage(order)
+            val message = buildString {
+                appendLine("توصيلة جديدة")
+                appendLine("الحالة: ${order.statusEnum.emoji} ${order.statusEnum.label}")
+                appendLine()
+                appendLine("الزبون: ${order.customerName}")
+                appendLine("الهاتف: ${order.customerPhone}")
+                appendLine("العنوان: ${order.deliveryAddress}")
+                if (order.locationUrl.isNotEmpty()) {
+                    appendLine()
+                    appendLine("الموقع: ${order.locationUrl}")
+                }
+                appendLine()
+                appendLine(fullDateFormat.format(Date(order.createdAt)))
+            }
             val cleanPhone = order.customerPhone.trim().replace("[^0-9+]".toRegex(), "")
             val internationalPhone = when {
                 cleanPhone.startsWith("+") -> cleanPhone
@@ -257,9 +255,43 @@ class OrderAdapter(
                 cleanPhone.startsWith("0") -> "+963${cleanPhone.substring(1)}"
                 else -> "+963$cleanPhone"
             }
+            Log.d("WA_Customer", "message=[$message] phone=[$internationalPhone]")
+            openWhatsAppWithMessage(context, internationalPhone, message)
+        }
+
+        private fun openWhatsAppWithMessage(context: Context, phone: String, message: String) {
             try {
-                val intent = Intent(Intent.ACTION_VIEW,
-                    Uri.parse("https://wa.me/$internationalPhone?text=${Uri.encode(message)}"))
+                val uri = Uri.Builder()
+                    .scheme("https")
+                    .authority("wa.me")
+                    .path("/$phone")
+                    .appendQueryParameter("text", message)
+                    .build()
+                context.startActivity(Intent(Intent.ACTION_VIEW, uri))
+                return
+            } catch (e: Exception) {
+                Log.w("WhatsApp", "wa.me فشل", e)
+            }
+            try {
+                val intent = Intent(Intent.ACTION_VIEW, Uri.parse("whatsapp://send?phone=$phone&text=${Uri.encode(message)}"))
+                context.startActivity(intent)
+                return
+            } catch (e: Exception) {
+                Log.w("WhatsApp", "whatsapp:// send فشل", e)
+            }
+            try {
+                val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://api.whatsapp.com/send?phone=$phone&text=${Uri.encode(message)}"))
+                context.startActivity(intent)
+                return
+            } catch (e: Exception) {
+                Log.w("WhatsApp", "api.whatsapp.com فشل", e)
+            }
+            try {
+                val intent = Intent(Intent.ACTION_SEND).apply {
+                    `package` = "com.whatsapp"
+                    type = "text/plain"
+                    putExtra(Intent.EXTRA_TEXT, message)
+                }
                 context.startActivity(intent)
             } catch (e: Exception) {
                 Toast.makeText(context, "تعذّر فتح واتساب", Toast.LENGTH_SHORT).show()
@@ -268,9 +300,7 @@ class OrderAdapter(
 
         private fun openWhatsApp(phone: String) {
             val context = binding.root.context
-            // تنظيف الرقم: إزالة المسافات والشرطات
             val cleanPhone = phone.trim().replace("[^0-9+]".toRegex(), "")
-            // إضافة كود الدولة إذا بدأ بـ 0 (سوريا +963)
             val internationalPhone = when {
                 cleanPhone.startsWith("+") -> cleanPhone
                 cleanPhone.startsWith("00") -> "+${cleanPhone.substring(2)}"
@@ -296,14 +326,15 @@ class OrderAdapter(
                 }
             } catch (e: Exception) { order.orderType }
             val message = buildString {
-                appendLine("🛵 توصيلة جديدة")
+                appendLine("توصيلة جديدة")
+                appendLine("الحالة: ${order.statusEnum.emoji} ${order.statusEnum.label}")
                 appendLine()
                 appendLine("الزبون: ${order.customerName}")
                 appendLine("الهاتف: ${order.customerPhone}")
                 appendLine("العنوان: ${order.deliveryAddress}")
                 if (order.locationUrl.isNotEmpty()) {
                     appendLine()
-                    appendLine("📍 الموقع: ${order.locationUrl}")
+                    appendLine("الموقع: ${order.locationUrl}")
                 }
                 appendLine()
                 appendLine("المواد:")
@@ -313,7 +344,7 @@ class OrderAdapter(
                     appendLine("ملاحظات: ${order.notes}")
                 }
                 appendLine()
-                appendLine("📅 ${fullDateFormat.format(Date(order.createdAt))}")
+                appendLine(fullDateFormat.format(Date(order.createdAt)))
             }
             val cleanPhone = driverPhone.trim().replace("[^0-9+]".toRegex(), "")
             val internationalPhone = when {
@@ -322,13 +353,8 @@ class OrderAdapter(
                 cleanPhone.startsWith("0") -> "+963${cleanPhone.substring(1)}"
                 else -> "+963$cleanPhone"
             }
-            try {
-                val intent = Intent(Intent.ACTION_VIEW,
-                    Uri.parse("https://wa.me/$internationalPhone?text=${Uri.encode(message)}"))
-                context.startActivity(intent)
-            } catch (e: Exception) {
-                Toast.makeText(context, "تعذّر فتح واتساب", Toast.LENGTH_SHORT).show()
-            }
+            Log.d("WA_Driver", "message=[$message] phone=[$internationalPhone]")
+            openWhatsAppWithMessage(context, internationalPhone, message)
         }
 
         // ✅ قائمة اختيار الحالة

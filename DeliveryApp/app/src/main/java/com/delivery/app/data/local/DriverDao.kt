@@ -19,6 +19,9 @@ interface DriverDao {
     @Query("SELECT * FROM drivers WHERE officeId = :officeId ORDER BY name ASC")
     fun getAllDrivers(officeId: Long = 0): LiveData<List<Driver>>
 
+    @Query("SELECT * FROM drivers WHERE officeId = :officeId ORDER BY name ASC")
+    suspend fun getDriversSync(officeId: Long = 0): List<Driver>
+
     @Query("SELECT COUNT(*) FROM orders WHERE driverName = :name AND orders.officeId = :officeId")
     fun getOrderCount(name: String, officeId: Long = 0): LiveData<Int>
 
