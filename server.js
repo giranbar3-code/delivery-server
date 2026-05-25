@@ -259,6 +259,7 @@ async function initDatabase(p) {
     await p.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivery_status TEXT DEFAULT 'PENDING'`).catch(e => {});
     await p.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS purchase_price DOUBLE PRECISION DEFAULT 0`).catch(e => {});
     await p.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivery_price DOUBLE PRECISION DEFAULT 0`).catch(e => {});
+    await p.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW()`).catch(e => {});
 
     // جدول السائقين
     await p.query(`CREATE TABLE IF NOT EXISTS drivers (
@@ -430,11 +431,12 @@ app.post('/api/orders', publicOrderLimiter, async (req, res) => {
       return res.status(201).json({ message: 'تم الاستلام', order });
     }
 
+    const now = new Date().toISOString();
     const order = {
       id: memoryId++, customerName, customerPhone, orderType: finalOrderType, quantity: finalQuantity,
       deliveryAddress, locationUrl: locationUrl||'', notes: notes||'', items: items || [],
       verified: isVerified, clientIp, officeId: finalOfficeId,
-      synced: false, createdAt: new Date().toISOString()
+      synced: false, createdAt: now, updatedAt: now
     };
     memoryOrders.unshift(order);
     if (memoryOrders.length > MAX_MEMORY_ORDERS) memoryOrders.length = MAX_MEMORY_ORDERS;
@@ -451,14 +453,18 @@ app.get('/api/orders', async (req, res) => {
     const officeId = parseInt(req.query.officeId) || 0;
     if (useDb) {
       const query = officeId > 0
-        ? 'SELECT * FROM orders WHERE created_at > $1 AND office_id = $2 ORDER BY created_at DESC'
-        : 'SELECT * FROM orders WHERE created_at > $1 ORDER BY created_at DESC';
+        ? `SELECT * FROM orders WHERE GREATEST(created_at, COALESCE(updated_at, created_at)) > $1 AND office_id = $2 ORDER BY GREATEST(created_at, COALESCE(updated_at, created_at)) DESC`
+        : `SELECT * FROM orders WHERE GREATEST(created_at, COALESCE(updated_at, created_at)) > $1 ORDER BY GREATEST(created_at, COALESCE(updated_at, created_at)) DESC`;
       const params = officeId > 0 ? [since, officeId] : [since];
       const r = await pool.query(query, params);
       return res.json(r.rows.map(formatOrder));
     }
     const sinceTime = new Date(since).getTime() || 0;
-    let filtered = memoryOrders.filter(o => new Date(o.createdAt).getTime() > sinceTime);
+    let filtered = memoryOrders.filter(o => {
+      const orderTime = new Date(o.createdAt).getTime();
+      const updateTime = o.updatedAt ? new Date(o.updatedAt).getTime() : orderTime;
+      return Math.max(orderTime, updateTime) > sinceTime;
+    });
     if (officeId > 0) {
       filtered = filtered.filter(o => o.officeId === officeId);
     }
@@ -491,6 +497,7 @@ function formatOrder(row) {
     locationUrl: row.location_url||'', notes: row.notes||'', items,
     verified: row.verified || false, clientIp: row.client_ip || '',
     synced: row.synced, createdAt: row.created_at,
+    updatedAt: row.updated_at || row.created_at,
     officeId: row.office_id || 0,
     driverName: row.driver_name || '', driverPhone: row.driver_phone || '',
     deliveryStatus: row.delivery_status || 'PENDING',
@@ -633,20 +640,23 @@ app.put('/api/driver/orders/:id/status', async (req, res) => {
 
     if (useDb) {
       const r = await pool.query(
-        'UPDATE orders SET delivery_status = $1 WHERE id = $2 AND delivery_status NOT IN ($3,$4) RETURNING *',
+        'UPDATE orders SET delivery_status = $1, updated_at = NOW() WHERE id = $2 AND delivery_status NOT IN ($3,$4) RETURNING *',
         [status, orderId, 'DELIVERED', 'CANCELLED']
       );
       if (r.rows.length === 0) return res.status(404).json({ error: 'الطلبية غير موجودة أو مكتملة' });
       const order = formatOrder(r.rows[0]);
       notifyClients(order.officeId || 0, { type: 'status_update', order });
+      notifyDriver(order.driverPhone, { type: 'status_update', order });
       return res.json({ order });
     }
 
     const idx = memoryOrders.findIndex(o => o.id === orderId && !['DELIVERED', 'CANCELLED'].includes(o.deliveryStatus || 'PENDING'));
     if (idx === -1) return res.status(404).json({ error: 'الطلبية غير موجودة أو مكتملة' });
     memoryOrders[idx].deliveryStatus = status;
+    memoryOrders[idx].updatedAt = new Date().toISOString();
     const order = memoryOrders[idx];
     notifyClients(order.officeId || 0, { type: 'status_update', order });
+    notifyDriver(order.driverPhone, { type: 'status_update', order });
     res.json({ order });
   } catch (err) {
     console.error(err); res.status(500).json({ error: 'خطأ في الخادم' });
@@ -713,7 +723,7 @@ app.put('/api/orders/:id/driver', async (req, res) => {
 
     if (useDb) {
       const r = await pool.query(
-        'UPDATE orders SET driver_name = $1, driver_phone = $2 WHERE id = $3 RETURNING *',
+        'UPDATE orders SET driver_name = $1, driver_phone = $2, updated_at = NOW() WHERE id = $3 RETURNING *',
         [driverName || '', driverPhone || '', orderId]
       );
       if (r.rows.length === 0) return res.status(404).json({ error: 'طلبية غير موجودة' });
@@ -728,6 +738,7 @@ app.put('/api/orders/:id/driver', async (req, res) => {
     if (idx === -1) return res.status(404).json({ error: 'طلبية غير موجودة' });
     memoryOrders[idx].driverName = driverName || '';
     memoryOrders[idx].driverPhone = driverPhone || '';
+    memoryOrders[idx].updatedAt = new Date().toISOString();
     const order = memoryOrders[idx];
     if (driverPhone) notifyDriver(driverPhone, { type: 'new_assignment', order });
     notifyClients(order.officeId || 0, { type: 'status_update', order });
@@ -748,7 +759,7 @@ app.put('/api/orders/:id/status', async (req, res) => {
     }
 
     if (useDb) {
-      const r = await pool.query('UPDATE orders SET delivery_status = $1 WHERE id = $2 RETURNING *', [status, orderId]);
+      const r = await pool.query('UPDATE orders SET delivery_status = $1, updated_at = NOW() WHERE id = $2 RETURNING *', [status, orderId]);
       if (r.rows.length === 0) return res.status(404).json({ error: 'طلبية غير موجودة' });
       const order = formatOrder(r.rows[0]);
       notifyClients(order.officeId || 0, { type: 'status_update', order });
@@ -759,6 +770,7 @@ app.put('/api/orders/:id/status', async (req, res) => {
     const idx = memoryOrders.findIndex(o => o.id === orderId);
     if (idx === -1) return res.status(404).json({ error: 'طلبية غير موجودة' });
     memoryOrders[idx].deliveryStatus = status;
+    memoryOrders[idx].updatedAt = new Date().toISOString();
     const order = memoryOrders[idx];
     notifyClients(order.officeId || 0, { type: 'status_update', order });
     if (order.driverPhone) notifyDriver(order.driverPhone, { type: 'status_update', order });
