@@ -624,6 +624,77 @@ app.get('/api/driver/orders', async (req, res) => {
   }
 });
 
+// إحصائيات السائق
+app.get('/api/driver/stats', async (req, res) => {
+  try {
+    const token = req.headers['x-driver-token'];
+    if (!token || !driverTokens.has(token)) {
+      return res.status(401).json({ error: 'رمز جلسة غير صالح' });
+    }
+    const driverPhone = driverTokens.get(token);
+
+    let driverName = '';
+    if (useDb) {
+      const r = await pool.query('SELECT name FROM drivers WHERE phone = $1', [driverPhone]);
+      if (r.rows.length === 0) return res.status(401).json({ error: 'سائق غير موجود' });
+      driverName = r.rows[0].name;
+    } else {
+      const d = memoryDrivers.find(d => d.phone === driverPhone);
+      if (!d) return res.status(401).json({ error: 'سائق غير موجود' });
+      driverName = d.name;
+    }
+
+    const now = new Date();
+    const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
+    const startOfWeek = new Date(now.getTime() - now.getDay() * 86400000).toISOString();
+    startOfWeek.setHours(0,0,0,0);
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
+
+    function getStartOfWeek() {
+      const d = new Date(now);
+      d.setDate(d.getDate() - d.getDay());
+      d.setHours(0,0,0,0);
+      return d.toISOString();
+    }
+
+    if (useDb) {
+      const [todayRes, weekRes, monthRes, allRes] = await Promise.all([
+        pool.query("SELECT COUNT(*) as total, COALESCE(SUM(CASE WHEN delivery_status='DELIVERED' THEN 1 ELSE 0 END),0) as delivered, COALESCE(SUM(CASE WHEN delivery_status='DELIVERED' THEN delivery_price ELSE 0 END),0) as revenue FROM orders WHERE driver_name=$1 AND created_at>=$2", [driverName, startOfDay]),
+        pool.query("SELECT COUNT(*) as total, COALESCE(SUM(CASE WHEN delivery_status='DELIVERED' THEN 1 ELSE 0 END),0) as delivered, COALESCE(SUM(CASE WHEN delivery_status='DELIVERED' THEN delivery_price ELSE 0 END),0) as revenue FROM orders WHERE driver_name=$1 AND created_at>=$2", [driverName, getStartOfWeek()]),
+        pool.query("SELECT COUNT(*) as total, COALESCE(SUM(CASE WHEN delivery_status='DELIVERED' THEN 1 ELSE 0 END),0) as delivered, COALESCE(SUM(CASE WHEN delivery_status='DELIVERED' THEN delivery_price ELSE 0 END),0) as revenue FROM orders WHERE driver_name=$1 AND created_at>=$2", [driverName, startOfMonth]),
+        pool.query("SELECT delivery_status, COUNT(*) as cnt FROM orders WHERE driver_name=$1 GROUP BY delivery_status", [driverName])
+      ]);
+      return res.json({
+        today: todayRes.rows[0],
+        week: weekRes.rows[0],
+        month: monthRes.rows[0],
+        statusDistribution: allRes.rows
+      });
+    }
+
+    // Memory mode
+    const driverOrders = memoryOrders.filter(o => o.driverName === driverName);
+    const today = driverOrders.filter(o => new Date(o.createdAt).getTime() >= new Date(startOfDay).getTime());
+    const week = driverOrders.filter(o => new Date(o.createdAt).getTime() >= new Date(getStartOfWeek()).getTime());
+    const month = driverOrders.filter(o => new Date(o.createdAt).getTime() >= new Date(startOfMonth).getTime());
+    const calc = (arr) => ({
+      total: arr.length,
+      delivered: arr.filter(o => o.deliveryStatus === 'DELIVERED').length,
+      revenue: arr.filter(o => o.deliveryStatus === 'DELIVERED').reduce((s, o) => s + parseFloat(o.deliveryPrice || 0), 0)
+    });
+    const dist = {};
+    driverOrders.forEach(o => { const s = o.deliveryStatus || 'PENDING'; dist[s] = (dist[s] || 0) + 1; });
+    res.json({
+      today: calc(today),
+      week: calc(week),
+      month: calc(month),
+      statusDistribution: Object.entries(dist).map(([delivery_status, cnt]) => ({ delivery_status, cnt }))
+    });
+  } catch (err) {
+    console.error(err); res.status(500).json({ error: 'خطأ في الخادم' });
+  }
+});
+
 // تحديث حالة طلبية من السائق
 app.put('/api/driver/orders/:id/status', async (req, res) => {
   try {
