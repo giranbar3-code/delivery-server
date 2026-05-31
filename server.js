@@ -436,7 +436,11 @@ app.post('/api/orders', publicOrderLimiter, async (req, res) => {
       id: memoryId++, customerName, customerPhone, orderType: finalOrderType, quantity: finalQuantity,
       deliveryAddress, locationUrl: locationUrl||'', notes: notes||'', items: items || [],
       verified: isVerified, clientIp, officeId: finalOfficeId,
-      synced: false, createdAt: now, updatedAt: now
+      synced: false, createdAt: now, updatedAt: now,
+      deliveryStatus: 'PENDING',
+      driverName: '', driverPhone: '',
+      purchasePrice: parseFloat(purchasePrice) || 0,
+      deliveryPrice: parseFloat(deliveryPrice) || 0
     };
     memoryOrders.unshift(order);
     if (memoryOrders.length > MAX_MEMORY_ORDERS) memoryOrders.length = MAX_MEMORY_ORDERS;
