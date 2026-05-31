@@ -220,7 +220,7 @@ async function connectToDatabase(retries = 5, delay = 3000) {
       const { Pool } = require('pg');
       const p = new Pool({
         connectionString: DATABASE_URL,
-        ssl: { rejectUnauthorized: true },
+        ssl: { rejectUnauthorized: false },
         connectionTimeoutMillis: 10000,
         query_timeout: 10000,
         family: 4
@@ -440,6 +440,7 @@ app.post('/api/orders', publicOrderLimiter, async (req, res) => {
     };
     memoryOrders.unshift(order);
     if (memoryOrders.length > MAX_MEMORY_ORDERS) memoryOrders.length = MAX_MEMORY_ORDERS;
+    notifyClients(finalOfficeId, { type: 'new_order', order });
     res.status(201).json({ message: 'تم الاستلام', order });
   } catch (err) {
     console.error(err);
